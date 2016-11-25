@@ -766,6 +766,16 @@ template <class ELFT> void LinkerDriver::link(opt::InputArgList &Args) {
     }
   }
 
+  if (Config->EMachine == EM_MIPS_CHERI) {
+    if (Config->DynamicLinker.empty())
+      Config->DynamicLinker = "/libexec/ld-cheri-elf.so.1";
+    if (Config->SearchPaths.empty()) {
+      Config->SearchPaths = {
+        "=/libcheri", "=/usr/libcheri", "=/usr/local/libcheri"
+      };
+    }
+  }
+
   // If an object file defining the entry symbol is in an archive file,
   // extract the file now.
   if (Symtab.find(Config->Entry))
