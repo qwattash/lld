@@ -17,6 +17,12 @@
 
 #include <vector>
 
+// XXXAR: this should be defined in llvm/Support/Elf.h instead but it's in
+// a separate repository
+namespace llvm { namespace ELF {
+static constexpr uint16_t EM_MIPS_CHERI = 0xC256;
+}}
+
 namespace lld {
 namespace elf {
 
@@ -153,6 +159,10 @@ struct Configuration {
   unsigned LtoO;
   unsigned Optimize;
   unsigned ThinLtoJobs;
+
+  bool isMIPS() const {
+    return EMachine == llvm::ELF::EM_MIPS || EMachine == llvm::ELF::EM_MIPS_CHERI;
+  }
 };
 
 // The only instance of Configuration struct.
@@ -160,9 +170,5 @@ extern Configuration *Config;
 
 } // namespace elf
 } // namespace lld
-
-// XXXAR: this should be defined in llvm/Support/Elf.h instead but it's in
-// a separate repository
-constexpr uint16_t EM_MIPS_CHERI = 0xC256;
 
 #endif

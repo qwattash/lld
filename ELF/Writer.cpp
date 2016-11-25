@@ -284,7 +284,7 @@ template <class ELFT> void Writer<ELFT>::createSyntheticSections() {
 
   // Add MIPS-specific sections.
   bool HasDynSymTab = !Symtab<ELFT>::X->getSharedFiles().empty() || Config->Pic;
-  if (Config->EMachine == EM_MIPS) {
+  if (Config->isMIPS()) {
     if (!Config->Shared && HasDynSymTab) {
       In<ELFT>::MipsRldMap = make<MipsRldMapSection<ELFT>>();
       Symtab<ELFT>::X->Sections.push_back(In<ELFT>::MipsRldMap);
@@ -329,7 +329,7 @@ template <class ELFT> void Writer<ELFT>::createSyntheticSections() {
 
   // Add .got. MIPS' .got is so different from the other archs,
   // it has its own class.
-  if (Config->EMachine == EM_MIPS) {
+  if (Config->isMIPS()) {
     In<ELFT>::MipsGot = make<MipsGotSection<ELFT>>();
     Symtab<ELFT>::X->Sections.push_back(In<ELFT>::MipsGot);
   } else {
@@ -624,7 +624,7 @@ template <class ELFT> void Writer<ELFT>::addRelIpltSymbols() {
 // The linker is expected to define some symbols depending on
 // the linking result. This function defines such symbols.
 template <class ELFT> void Writer<ELFT>::addReservedSymbols() {
-  if (Config->EMachine == EM_MIPS) {
+  if (Config->isMIPS()) {
     // Define _gp for MIPS. st_value of _gp symbol will be updated by Writer
     // so that it points to an absolute address which is relative to GOT.
     // Default offset is 0x7ff0.
@@ -666,7 +666,7 @@ template <class ELFT> void Writer<ELFT>::addReservedSymbols() {
   // MIPS - the libc for these targets defines __tls_get_addr itself because
   // there are no TLS optimizations for these targets.
   if (!In<ELFT>::DynSymTab &&
-      (Config->EMachine != EM_MIPS && Config->EMachine != EM_ARM))
+      (!Config->isMIPS() && Config->EMachine != EM_ARM))
     Symtab<ELFT>::X->addIgnored("__tls_get_addr");
 
   // If linker script do layout we do not need to create any standart symbols.
@@ -1442,7 +1442,7 @@ template <class ELFT> void Writer<ELFT>::fixAbsoluteSymbols() {
 
   // Setup MIPS _gp_disp/__gnu_local_gp symbols which should
   // be equal to the _gp symbol's value.
-  if (Config->EMachine == EM_MIPS) {
+  if (Config->isMIPS()) {
     uintX_t GpDisp = In<ELFT>::MipsGot->getGp() - In<ELFT>::MipsGot->getVA();
     if (ElfSym<ELFT>::MipsGpDisp)
       ElfSym<ELFT>::MipsGpDisp->Value = GpDisp;
@@ -1477,7 +1477,7 @@ template <class ELFT> void Writer<ELFT>::writeHeader() {
     // but we don't have any firm guarantees of conformance. Linux AArch64
     // kernels (as of 2016) require an EABI version to be set.
     EHdr->e_flags = EF_ARM_EABI_VER5;
-  else if (Config->EMachine == EM_MIPS)
+  else if (Config->isMIPS())
     EHdr->e_flags = getMipsEFlags<ELFT>();
 
   if (!Config->Relocatable) {
