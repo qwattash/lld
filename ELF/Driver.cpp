@@ -759,7 +759,11 @@ template <class ELFT> void LinkerDriver::link(opt::InputArgList &Args) {
              Config->EMachine != EM_AMDGPU) {
     // -e was not specified. Use the default start symbol name
     // if it is resolvable.
-    Config->Entry = (Config->EMachine == EM_MIPS) ? "__start" : "_start";
+    if (Config->EMachine == EM_MIPS || Config->EMachine == EM_MIPS_CHERI) {
+      Config->Entry = "__start";
+    } else {
+      Config->Entry = "_start";
+    }
   }
 
   // If an object file defining the entry symbol is in an archive file,
