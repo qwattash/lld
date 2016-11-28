@@ -40,9 +40,6 @@ enum ELFKind {
 // For --build-id.
 enum class BuildIdKind { None, Fast, Md5, Sha1, Hexstring, Uuid };
 
-// For --color-diagnostics.
-enum class ColorPolicy { Auto, Always, Never };
-
 // For --discard-{all,locals,none}.
 enum class DiscardPolicy { Default, All, Locals, None };
 
@@ -88,8 +85,8 @@ struct Configuration {
   llvm::StringRef Emulation;
   llvm::StringRef Fini;
   llvm::StringRef Init;
-  llvm::StringRef LtoAAPipeline;
-  llvm::StringRef LtoNewPmPasses;
+  llvm::StringRef LTOAAPipeline;
+  llvm::StringRef LTONewPmPasses;
   llvm::StringRef OutputFile;
   llvm::StringRef SoName;
   llvm::StringRef Sysroot;
@@ -106,6 +103,7 @@ struct Configuration {
   bool AsNeeded = false;
   bool Bsymbolic;
   bool BsymbolicFunctions;
+  bool ColorDiagnostics = false;
   bool Demangle = true;
   bool DisableVerify;
   bool EhFrameHdr;
@@ -144,7 +142,6 @@ struct Configuration {
   bool ZRelro;
   bool ExitEarly;
   bool ZWxneeded;
-  ColorPolicy ColorDiagnostics = ColorPolicy::Auto;
   DiscardPolicy Discard;
   SortSectionPolicy SortSection;
   StripPolicy Strip = StripPolicy::None;
@@ -155,14 +152,14 @@ struct Configuration {
   uint16_t DefaultSymbolVersion = llvm::ELF::VER_NDX_GLOBAL;
   uint16_t EMachine = llvm::ELF::EM_NONE;
   uint64_t EntryAddr = 0;
-  uint64_t ErrorLimit = 20; // initialize it early so that error() won't complain
+  uint64_t ErrorLimit = 20;
   uint64_t ImageBase;
   uint64_t MaxPageSize;
   uint64_t ZStackSize;
-  unsigned LtoPartitions;
-  unsigned LtoO;
+  unsigned LTOPartitions;
+  unsigned LTOO;
   unsigned Optimize;
-  unsigned ThinLtoJobs;
+  unsigned ThinLTOJobs;
 
   bool isMIPS() const {
     return EMachine == llvm::ELF::EM_MIPS || EMachine == llvm::ELF::EM_MIPS_CHERI;

@@ -566,7 +566,7 @@ template <class ELFT> void LinkerScript<ELFT>::adjustSectionsBeforeSorting() {
   // '.' is assigned to, but creating these section should not have any bad
   // consequeces and gives us a section to put the symbol in.
   uintX_t Flags = SHF_ALLOC;
-  uint32_t Type = 0;
+  uint32_t Type = SHT_NOBITS;
   for (const std::unique_ptr<BaseCommand> &Base : Opt.Commands) {
     auto *Cmd = dyn_cast<OutputSectionCommand>(Base.get());
     if (!Cmd)
@@ -650,6 +650,27 @@ void LinkerScript<ELFT>::placeOrphanSections() {
   // This loops creates or moves commands as needed so that they are in the
   // correct order.
   int CmdIndex = 0;
+
+  // As a horrible special case, skip the first . assignment if it is before any
+  // section. We do this because it is common to set a load address by starting
+  // the script with ". = 0xabcd" and the expectation is that every section is
+  // after that.
+  auto FirstSectionOrDotAssignment =
+      std::find_if(Opt.Commands.begin(), Opt.Commands.end(),
+                   [](const std::unique_ptr<BaseCommand> &Cmd) {
+                     if (isa<OutputSectionCommand>(*Cmd))
+                       return true;
+                     const auto *Assign = dyn_cast<SymbolAssignment>(Cmd.get());
+                     if (!Assign)
+                       return false;
+                     return Assign->Name == ".";
+                   });
+  if (FirstSectionOrDotAssignment != Opt.Commands.end()) {
+    CmdIndex = FirstSectionOrDotAssignment - Opt.Commands.begin();
+    if (isa<SymbolAssignment>(**FirstSectionOrDotAssignment))
+      ++CmdIndex;
+  }
+
   for (OutputSectionBase *Sec : *OutputSections) {
     StringRef Name = Sec->getName();
 
