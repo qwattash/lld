@@ -61,6 +61,7 @@ private:
   void addPredefinedSections();
 
   std::vector<Phdr> createPhdrs();
+  void addPtArmExid(std::vector<Phdr> &Phdrs);
   void assignAddresses();
   void assignFileOffsets();
   void assignFileOffsetsBinary();
@@ -182,6 +183,7 @@ template <class ELFT> void Writer<ELFT>::run() {
   } else {
     Phdrs = Script<ELFT>::X->hasPhdrsCommands() ? Script<ELFT>::X->createPhdrs()
                                                 : createPhdrs();
+    addPtArmExid(Phdrs);
     fixHeaders();
     if (ScriptConfig->HasSections) {
       Script<ELFT>::X->assignAddresses(Phdrs);
@@ -491,12 +493,12 @@ static bool compareSectionsNonScript(const OutputSectionBase *A,
   if (AIsWritable != BIsWritable)
     return BIsWritable;
 
-  if (!ScriptConfig->HasSections) {
+  if (!Config->SingleRoRx) {
     // For a corresponding reason, put non exec sections first (the program
     // header PT_LOAD is not executable).
     // We only do that if we are not using linker scripts, since with linker
     // scripts ro and rx sections are in the same PT_LOAD, so their relative
-    // order is not important.
+    // order is not important. The same applies for -no-rosegment.
     bool AIsExec = A->Flags & SHF_EXECINSTR;
     bool BIsExec = B->Flags & SHF_EXECINSTR;
     if (AIsExec != BIsExec)
@@ -1107,7 +1109,7 @@ template <class ELFT> static bool needsPtLoad(OutputSectionBase *Sec) {
 // cannot create a PT_LOAD there.
 template <class ELFT>
 static typename ELFT::uint computeFlags(typename ELFT::uint F) {
-  if (ScriptConfig->HasSections && !(F & PF_W))
+  if (Config->SingleRoRx && !(F & PF_W))
     return F | PF_X;
   return F;
 }
@@ -1142,7 +1144,6 @@ template <class ELFT> std::vector<PhdrEntry<ELFT>> Writer<ELFT>::createPhdrs() {
   Phdr TlsHdr(PT_TLS, PF_R);
   Phdr RelRo(PT_GNU_RELRO, PF_R);
   Phdr Note(PT_NOTE, PF_R);
-  Phdr ARMExidx(PT_ARM_EXIDX, PF_R);
   for (OutputSectionBase *Sec : OutputSections) {
     if (!(Sec->Flags & SHF_ALLOC))
       break;
@@ -1173,8 +1174,6 @@ template <class ELFT> std::vector<PhdrEntry<ELFT>> Writer<ELFT>::createPhdrs() {
       RelRo.add(Sec);
     if (Sec->Type == SHT_NOTE)
       Note.add(Sec);
-    if (Config->EMachine == EM_ARM && Sec->Type == SHT_ARM_EXIDX)
-      ARMExidx.add(Sec);
   }
 
   // Add the TLS segment unless it's empty.
@@ -1207,10 +1206,6 @@ template <class ELFT> std::vector<PhdrEntry<ELFT>> Writer<ELFT>::createPhdrs() {
     Hdr.add(Sec);
   }
 
-  // PT_ARM_EXIDX is the ARM EHABI equivalent of PT_GNU_EH_FRAME
-  if (ARMExidx.First)
-    Ret.push_back(std::move(ARMExidx));
-
   // PT_GNU_STACK is a special section to tell the loader to make the
   // pages for the stack non-executable.
   if (!Config->ZExecstack) {
@@ -1229,6 +1224,22 @@ template <class ELFT> std::vector<PhdrEntry<ELFT>> Writer<ELFT>::createPhdrs() {
   if (Note.First)
     Ret.push_back(std::move(Note));
   return Ret;
+}
+
+template <class ELFT>
+void Writer<ELFT>::addPtArmExid(std::vector<PhdrEntry<ELFT>> &Phdrs) {
+  if (Config->EMachine != EM_ARM)
+    return;
+  auto I = std::find_if(
+      OutputSections.begin(), OutputSections.end(),
+      [](OutputSectionBase *Sec) { return Sec->Type == SHT_ARM_EXIDX; });
+  if (I == OutputSections.end())
+    return;
+
+  // PT_ARM_EXIDX is the ARM EHABI equivalent of PT_GNU_EH_FRAME
+  Phdr ARMExidx(PT_ARM_EXIDX, PF_R);
+  ARMExidx.add(*I);
+  Phdrs.push_back(ARMExidx);
 }
 
 // The first section of each PT_LOAD and the first section after PT_GNU_RELRO
