@@ -120,6 +120,7 @@ struct Configuration {
   bool NoUndefinedVersion;
   bool Nostdlib;
   bool OFormatBinary;
+  bool OMagic;
   bool Pic;
   bool Pie;
   bool PrintGcSections;
