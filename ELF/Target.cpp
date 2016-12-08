@@ -441,12 +441,13 @@ uint64_t X86TargetInfo::getImplicitAddend(const uint8_t *Buf,
   default:
     return 0;
   case R_386_16:
+  case R_386_PC16:
+    return read16le(Buf);
   case R_386_32:
   case R_386_GOT32:
   case R_386_GOT32X:
   case R_386_GOTOFF:
   case R_386_GOTPC:
-  case R_386_PC16:
   case R_386_PC32:
   case R_386_PLT32:
   case R_386_TLS_LE:
@@ -1979,10 +1980,10 @@ RelExpr MipsTargetInfo<ELFT>::getRelExpr(uint32_t Type,
   case R_MIPS_HI16:
   case R_MIPS_LO16:
   case R_MIPS_GOT_OFST:
-    // MIPS _gp_disp designates offset between start of function and 'gp'
-    // pointer into GOT. __gnu_local_gp is equal to the current value of
-    // the 'gp'. Therefore any relocations against them do not require
-    // dynamic relocation.
+    // R_MIPS_HI16/R_MIPS_LO16 relocations against _gp_disp calculate
+    // offset between start of function and 'gp' value which by default
+    // equal to the start of .got section. In that case we consider these
+    // relocations as relative.
     if (&S == ElfSym<ELFT>::MipsGpDisp)
       return R_PC;
     return R_ABS;
