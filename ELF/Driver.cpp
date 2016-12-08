@@ -577,6 +577,7 @@ void LinkerDriver::readConfigs(opt::InputArgList &Args) {
   Config->SortSection = getSortKind(Args);
   Config->Target2 = getTarget2Option(Args);
   Config->UnresolvedSymbols = getUnresolvedSymbolOption(Args);
+  Config->WarnMissingEntry = (Args.hasArg(OPT_entry) || !Config->Shared);
 
   // --omagic is an option to create old-fashioned executables in which
   // .text segments are writable. Today, the option is still in use to
@@ -738,7 +739,7 @@ static uint64_t getImageBase(opt::InputArgList &Args) {
     error("-image-base: number expected, but got " + S);
     return 0;
   }
-  if ((V % Target->MaxPageSize) != 0)
+  if ((V % Config->MaxPageSize) != 0)
     warn("-image-base: address isn't multiple of page size: " + S);
   return V;
 }
@@ -758,46 +759,28 @@ template <class ELFT> void LinkerDriver::link(opt::InputArgList &Args) {
       ELFT::Is64Bits || Config->EMachine == EM_X86_64 || Config->MipsN32Abi;
   Config->Mips64EL =
       (Config->isMIPS() && Config->EKind == ELF64LEKind);
+
+  // Initialize Config->MaxPageSize. The default value is defined by
+  // each target.
+  Config->MaxPageSize =
+      getZOptionValue(Args, "max-page-size", Target->DefaultMaxPageSize);
+  if (!isPowerOf2_64(Config->MaxPageSize))
+    error("max-page-size: value isn't a power of 2");
+
   Config->ImageBase = getImageBase(Args);
 
   // Default output filename is "a.out" by the Unix tradition.
   if (Config->OutputFile.empty())
     Config->OutputFile = "a.out";
 
-  // Handle --trace-symbol.
-  for (auto *Arg : Args.filtered(OPT_trace_symbol))
-    Symtab.trace(Arg->getValue());
+  // Use default entry point name if -e was missing. AMDGPU binaries
+  // have no entries. For some reason, MIPS' entry point name is
+  // different from others.
+  if (Config->Entry.empty() && !Config->Relocatable &&
+      Config->EMachine != EM_AMDGPU)
+    Config->Entry = Config->isMIPS() ? "__start" : "_start";
 
-  // Initialize Config->MaxPageSize. The default value is defined by
-  // the target, but it can be overriden using the option.
-  Config->MaxPageSize =
-      getZOptionValue(Args, "max-page-size", Target->MaxPageSize);
-  if (!isPowerOf2_64(Config->MaxPageSize))
-    error("max-page-size: value isn't a power of 2");
-
-  // Add all files to the symbol table. After this, the symbol table
-  // contains all known names except a few linker-synthesized symbols.
-  for (InputFile *F : Files)
-    Symtab.addFile(F);
-
-  // Add the start symbol.
-  // It initializes either Config->Entry or Config->EntryAddr.
-  // Note that AMDGPU binaries have no entries.
-  if (!Config->Entry.empty()) {
-    // It is either "-e <addr>" or "-e <symbol>".
-    if (!Config->Entry.getAsInteger(0, Config->EntryAddr))
-      Config->Entry = "";
-  } else if (!Config->Shared && !Config->Relocatable &&
-             Config->EMachine != EM_AMDGPU) {
-    // -e was not specified. Use the default start symbol name
-    // if it is resolvable.
-    if (Config->isMIPS()) {
-      Config->Entry = "__start";
-    } else {
-      Config->Entry = "_start";
-    }
-  }
-
+  // XXXAR: we should probably hard-code these paths somewhere else
   if (Config->EMachine == EM_MIPS_CHERI) {
     if (Config->DynamicLinker.empty())
       Config->DynamicLinker = "/libexec/ld-cheri-elf.so.1";
@@ -808,13 +791,24 @@ template <class ELFT> void LinkerDriver::link(opt::InputArgList &Args) {
     }
   }
 
-  // If an object file defining the entry symbol is in an archive file,
-  // extract the file now.
+  // Handle --trace-symbol.
+  for (auto *Arg : Args.filtered(OPT_trace_symbol))
+    Symtab.trace(Arg->getValue());
+
+  // Add all files to the symbol table. This will add almost all
+  // symbols that we need to the symbol table.
+  for (InputFile *F : Files)
+    Symtab.addFile(F);
+
+  // If an entry symbol is in a static archive, pull out that file now
+  // to complete the symbol table. After this, no new names except a
+  // few linker-synthesized ones will be added to the symbol table.
   if (Symtab.find(Config->Entry))
     Symtab.addUndefined(Config->Entry);
 
+  // Return if there were name resolution errors.
   if (ErrorCount)
-    return; // There were duplicate symbols or incompatible files
+    return;
 
   Symtab.scanUndefinedFlags();
   Symtab.scanShlibUndefined();

@@ -1325,20 +1325,18 @@ template <class ELFT> void Writer<ELFT>::assignAddresses() {
 // executables without any address adjustment.
 template <class ELFT, class uintX_t>
 static uintX_t getFileAlignment(uintX_t Off, OutputSectionBase *Sec) {
-  uintX_t Alignment = Sec->Addralign;
-  if (Sec->PageAlign)
-    Alignment = std::max<uintX_t>(Alignment, Config->MaxPageSize);
-  Off = alignTo(Off, Alignment);
-
   OutputSectionBase *First = Sec->FirstInPtLoad;
-  // If the section is not in a PT_LOAD, we have no other constraint.
+  // If the section is not in a PT_LOAD, we just have to align it.
   if (!First)
-    return Off;
+    return alignTo(Off, Sec->Addralign);
 
-  // If two sections share the same PT_LOAD the file offset is calculated using
-  // this formula: Off2 = Off1 + (VA2 - VA1).
+  // The first section in a PT_LOAD has to have congruent offset and address
+  // module the page size.
   if (Sec == First)
-    return alignTo(Off, Target->MaxPageSize, Sec->Addr);
+    return alignTo(Off, Config->MaxPageSize, Sec->Addr);
+
+  // If two sections share the same PT_LOAD the file offset is calculated
+  // using this formula: Off2 = Off1 + (VA2 - VA1).
   return First->Offset + Sec->Addr - First->Addr;
 }
 
@@ -1415,22 +1413,26 @@ template <class ELFT> void Writer<ELFT>::setPhdrs() {
 // 4. the address of the first byte of the .text section, if present;
 // 5. the address 0.
 template <class ELFT> typename ELFT::uint Writer<ELFT>::getEntryAddr() {
-  // Case 1, 2 or 3
-  if (Config->Entry.empty())
-    return Config->EntryAddr;
+  // Case 1, 2 or 3. As a special case, if the symbol is actually
+  // a number, we'll use that number as an address.
   if (SymbolBody *B = Symtab<ELFT>::X->find(Config->Entry))
     return B->getVA<ELFT>();
+  uint64_t Addr;
+  if (!Config->Entry.getAsInteger(0, Addr))
+    return Addr;
 
   // Case 4
   if (OutputSectionBase *Sec = findSection(".text")) {
-    warn("cannot find entry symbol " + Config->Entry + "; defaulting to 0x" +
-         utohexstr(Sec->Addr));
+    if (Config->WarnMissingEntry)
+      warn("cannot find entry symbol " + Config->Entry + "; defaulting to 0x" +
+           utohexstr(Sec->Addr));
     return Sec->Addr;
   }
 
   // Case 5
-  warn("cannot find entry symbol " + Config->Entry +
-       "; not setting start address");
+  if (Config->WarnMissingEntry)
+    warn("cannot find entry symbol " + Config->Entry +
+         "; not setting start address");
   return 0;
 }
 
