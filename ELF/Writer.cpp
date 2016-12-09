@@ -804,18 +804,6 @@ void Writer<ELFT>::forEachRelSec(
     // processed by InputSection::relocateNonAlloc.
     if (!(IS->Flags & SHF_ALLOC))
       continue;
-#if 0 // not sure if these checks here are too strict
-    // XXXAR: avoid errors when reloc code attempts to process __cap_relocs section
-    if (IS->Type == SHT_PROGBITS)
-      continue;
-    // FIXME: is it correct to restrict this to only SHT_REL and SHT_RELA sections?
-    if (IS->Type != SHT_REL && IS->Type != SHT_RELA)
-      continue;
-    // XXXAR: avoid errors when reloc code attempts to process __cap_relocs section
-    // TODO: should probably use a better check?
-#endif
-    if (IS->Name == "__cap_relocs")
-      continue;
     if (isa<InputSection<ELFT>>(IS) || isa<EhInputSection<ELFT>>(IS)) {
       errs() << "Relocating:" << IS->Name << format(" type=%d, flags=%x\n", IS->Type, IS->Flags);
       Fn(*IS);
