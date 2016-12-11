@@ -18,8 +18,8 @@
 #include "Config.h"
 #include "Error.h"
 #include "LinkerScript.h"
-#include "Memory.h"
 #include "Symbols.h"
+#include "lld/Support/Memory.h"
 #include "llvm/ADT/STLExtras.h"
 
 using namespace llvm;
@@ -204,6 +204,7 @@ std::pair<Symbol *, bool> SymbolTable<ELFT>::insert(StringRef Name) {
   Symbol *Sym;
   if (IsNew) {
     Sym = new (BAlloc) Symbol;
+    Sym->InVersionScript = false;
     Sym->Binding = STB_WEAK;
     Sym->Visibility = STV_DEFAULT;
     Sym->IsUsedInRegularObj = false;
@@ -435,8 +436,12 @@ void SymbolTable<ELFT>::addShared(SharedFile<ELFT> *F, StringRef Name,
   std::tie(S, WasInserted) =
       insert(Name, Sym.getType(), STV_DEFAULT, /*CanOmitFromDynSym*/ true, F);
   // Make sure we preempt DSO symbols with default visibility.
-  if (Sym.getVisibility() == STV_DEFAULT)
+  if (Sym.getVisibility() == STV_DEFAULT) {
     S->ExportDynamic = true;
+    // Exporting preempting symbols takes precedence over linker scripts.
+    if (S->VersionId == VER_NDX_LOCAL)
+      S->VersionId = VER_NDX_GLOBAL;
+  }
   if (WasInserted || isa<Undefined>(S->body())) {
     replaceBody<SharedSymbol<ELFT>>(S, F, Name, Sym, Verdef);
     if (!S->isWeak())
@@ -547,13 +552,6 @@ template <class ELFT> void SymbolTable<ELFT>::scanShlibUndefined() {
           Sym->symbol()->ExportDynamic = true;
 }
 
-// This function processes --export-dynamic-symbol and --dynamic-list.
-template <class ELFT> void SymbolTable<ELFT>::scanDynamicList() {
-  for (StringRef S : Config->DynamicList)
-    if (SymbolBody *B = find(S))
-      B->symbol()->ExportDynamic = true;
-}
-
 // Initialize DemangledSyms with a map from demangled symbols to symbol
 // objects. Used to handle "extern C++" directive in version scripts.
 //
@@ -583,7 +581,7 @@ void SymbolTable<ELFT>::initDemangledSyms() {
 }
 
 template <class ELFT>
-std::vector<SymbolBody *> SymbolTable<ELFT>::find(SymbolVersion Ver) {
+std::vector<SymbolBody *> SymbolTable<ELFT>::findByVersion(SymbolVersion Ver) {
   if (Ver.IsExternCpp) {
     initDemangledSyms();
     auto I = DemangledSyms->find(Ver.Name);
@@ -597,7 +595,8 @@ std::vector<SymbolBody *> SymbolTable<ELFT>::find(SymbolVersion Ver) {
 }
 
 template <class ELFT>
-std::vector<SymbolBody *> SymbolTable<ELFT>::findAll(SymbolVersion Ver) {
+std::vector<SymbolBody *>
+SymbolTable<ELFT>::findAllByVersion(SymbolVersion Ver) {
   std::vector<SymbolBody *> Res;
   StringMatcher M({Ver.Name});
 
@@ -628,12 +627,13 @@ std::vector<SymbolBody *> SymbolTable<ELFT>::findAll(SymbolVersion Ver) {
 template <class ELFT> void SymbolTable<ELFT>::handleAnonymousVersion() {
   for (SymbolVersion &Ver : Config->VersionScriptGlobals) {
     if (Ver.HasWildcard) {
-      for (SymbolBody *B : findAll(Ver))
+      for (SymbolBody *B : findAllByVersion(Ver))
         B->symbol()->VersionId = VER_NDX_GLOBAL;
       continue;
     }
-    for (SymbolBody *B : find(Ver))
-      B->symbol()->VersionId = VER_NDX_GLOBAL;
+    for (SymbolBody *B : findByVersion(Ver))
+      if (B)
+        B->symbol()->VersionId = VER_NDX_GLOBAL;
   }
 }
 
@@ -646,7 +646,7 @@ void SymbolTable<ELFT>::assignExactVersion(SymbolVersion Ver, uint16_t VersionId
     return;
 
   // Get a list of symbols which we need to assign the version to.
-  std::vector<SymbolBody *> Syms = find(Ver);
+  std::vector<SymbolBody *> Syms = findByVersion(Ver);
 
   // Assign the version.
   for (SymbolBody *B : Syms) {
@@ -657,9 +657,11 @@ void SymbolTable<ELFT>::assignExactVersion(SymbolVersion Ver, uint16_t VersionId
       continue;
     }
 
-    if (B->symbol()->VersionId != Config->DefaultSymbolVersion)
+    Symbol *Sym = B->symbol();
+    if (Sym->InVersionScript)
       warn("duplicate symbol '" + Ver.Name + "' in version script");
-    B->symbol()->VersionId = VersionId;
+    Sym->VersionId = VersionId;
+    Sym->InVersionScript = true;
   }
 }
 
@@ -668,7 +670,7 @@ void SymbolTable<ELFT>::assignWildcardVersion(SymbolVersion Ver,
                                               uint16_t VersionId) {
   if (!Ver.HasWildcard)
     return;
-  std::vector<SymbolBody *> Syms = findAll(Ver);
+  std::vector<SymbolBody *> Syms = findAllByVersion(Ver);
 
   // Exact matching takes precendence over fuzzy matching,
   // so we set a version to a symbol only if no version has been assigned

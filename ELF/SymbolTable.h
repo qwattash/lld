@@ -81,7 +81,6 @@ public:
 
   void scanUndefinedFlags();
   void scanShlibUndefined();
-  void scanDynamicList();
   void scanVersionScript();
 
   SymbolBody *find(StringRef Name);
@@ -97,8 +96,8 @@ private:
                                    uint8_t Visibility, bool CanOmitFromDynSym,
                                    InputFile *File);
 
-  std::vector<SymbolBody *> find(SymbolVersion Ver);
-  std::vector<SymbolBody *> findAll(SymbolVersion Ver);
+  std::vector<SymbolBody *> findByVersion(SymbolVersion Ver);
+  std::vector<SymbolBody *> findAllByVersion(SymbolVersion Ver);
 
   void initDemangledSyms();
   void handleAnonymousVersion();
