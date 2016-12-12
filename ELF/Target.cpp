@@ -52,7 +52,8 @@ static void or32le(uint8_t *P, int32_t V) { write32le(P, read32le(P) | V); }
 static void or32be(uint8_t *P, int32_t V) { write32be(P, read32be(P) | V); }
 
 std::string toString(uint32_t Type) {
-  return getELFRelocationTypeName(Config->EMachine, Type);
+  auto Machine = Config->EMachine == EM_MIPS_CHERI ? EM_MIPS : Config->EMachine;
+  return getELFRelocationTypeName(Machine, Type);
 }
 
 template <unsigned N>
