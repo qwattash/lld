@@ -804,7 +804,7 @@ void Writer<ELFT>::forEachRelSec(
     if (!(IS->Flags & SHF_ALLOC))
       continue;
     if (isa<InputSection<ELFT>>(IS) || isa<EhInputSection<ELFT>>(IS)) {
-      errs() << "Relocating:" << IS->Name << format(" type=%d, flags=%x\n", IS->Type, IS->Flags);
+      // errs() << "Relocating:" << IS->Name << format(" type=%d, flags=%x\n", IS->Type, IS->Flags);
       Fn(*IS);
     }
   }
@@ -1493,12 +1493,18 @@ template <class ELFT> void Writer<ELFT>::fixAbsoluteSymbols() {
   // Setup MIPS _gp_disp/__gnu_local_gp symbols which should
   // be equal to the _gp symbol's value.
   if (Config->isMIPS()) {
-    if (!ElfSym<ELFT>::MipsGp->Value)
+    if (!ElfSym<ELFT>::MipsGp->Value) {
       ElfSym<ELFT>::MipsGp->Value = In<ELFT>::MipsGot->getVA() + 0x7ff0;
-    if (ElfSym<ELFT>::MipsGpDisp)
+      errs() << format("Set _gp to %lx\n", ElfSym<ELFT>::MipsGp->Value);
+    }
+    if (ElfSym<ELFT>::MipsGpDisp) {
       ElfSym<ELFT>::MipsGpDisp->Value = ElfSym<ELFT>::MipsGp->Value;
-    if (ElfSym<ELFT>::MipsLocalGp)
+      errs() << format("Set _gp_disp to %lx\n", ElfSym<ELFT>::MipsGp->Value);
+    }
+    if (ElfSym<ELFT>::MipsLocalGp) {
       ElfSym<ELFT>::MipsLocalGp->Value = ElfSym<ELFT>::MipsGp->Value;
+      errs() << format("Set _gp_local to %lx\n", ElfSym<ELFT>::MipsGp->Value);
+    }
   }
 }
 
