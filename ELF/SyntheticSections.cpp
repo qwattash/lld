@@ -147,6 +147,11 @@ MipsAbiFlagsSection<ELFT> *MipsAbiFlagsSection<ELFT>::create() {
       error(Filename + ": invalid size of .MIPS.abiflags section: " +
            Twine(Size) + " is not a multiple of " + Twine(ABIFlagsSize));
     }
+    if (Size > ABIFlagsSize) {
+      warn(Filename + ": .MIPS.abiflags section has multiple entries: got " +
+          Twine(Size) + " instead of " + Twine(ABIFlagsSize) + " bytes");
+      return nullptr;
+    }
 
     for (size_t Offset = 0; Offset < Size; Offset += ABIFlagsSize) {
       auto *S = reinterpret_cast<const Elf_Mips_ABIFlags *>(Sec->Data.data() + Offset);
