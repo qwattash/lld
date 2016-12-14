@@ -135,29 +135,40 @@ MipsAbiFlagsSection<ELFT> *MipsAbiFlagsSection<ELFT>::create() {
     Create = true;
 
     std::string Filename = toString(Sec->getFile());
-    if (Sec->Data.size() != sizeof(Elf_Mips_ABIFlags)) {
-      error(Filename + ": invalid size of .MIPS.abiflags section");
+    const auto Size = Sec->Data.size();
+    constexpr auto ABIFlagsSize = sizeof(Elf_Mips_ABIFlags);
+    if (Size < ABIFlagsSize) {
+      error(Filename + ": invalid size of .MIPS.abiflags section: got " +
+            Twine(Size) + " instead of " + Twine(ABIFlagsSize));
       return nullptr;
     }
-    auto *S = reinterpret_cast<const Elf_Mips_ABIFlags *>(Sec->Data.data());
-    if (S->version != 0) {
-      error(Filename + ": unexpected .MIPS.abiflags version " +
-            Twine(S->version));
-      return nullptr;
+    // Older version of BFD concatenate .MIPS.abiflags instead of merging
+    if ((Size % ABIFlagsSize) != 0) {
+      error(Filename + ": invalid size of .MIPS.abiflags section: " +
+           Twine(Size) + " is not a multiple of " + Twine(ABIFlagsSize));
     }
 
-    // LLD checks ISA compatibility in getMipsEFlags(). Here we just
-    // select the highest number of ISA/Rev/Ext.
-    Flags.isa_level = std::max(Flags.isa_level, S->isa_level);
-    Flags.isa_rev = std::max(Flags.isa_rev, S->isa_rev);
-    Flags.isa_ext = std::max(Flags.isa_ext, S->isa_ext);
-    Flags.gpr_size = std::max(Flags.gpr_size, S->gpr_size);
-    Flags.cpr1_size = std::max(Flags.cpr1_size, S->cpr1_size);
-    Flags.cpr2_size = std::max(Flags.cpr2_size, S->cpr2_size);
-    Flags.ases |= S->ases;
-    Flags.flags1 |= S->flags1;
-    Flags.flags2 |= S->flags2;
-    Flags.fp_abi = elf::getMipsFpAbiFlag(Flags.fp_abi, S->fp_abi, Filename);
+    for (size_t Offset = 0; Offset < Size; Offset += ABIFlagsSize) {
+      auto *S = reinterpret_cast<const Elf_Mips_ABIFlags *>(Sec->Data.data() + Offset);
+      if (S->version != 0) {
+        error(Filename + ": unexpected .MIPS.abiflags version " +
+              Twine(S->version));
+        return nullptr;
+      }
+
+      // LLD checks ISA compatibility in getMipsEFlags(). Here we just
+      // select the highest number of ISA/Rev/Ext.
+      Flags.isa_level = std::max(Flags.isa_level, S->isa_level);
+      Flags.isa_rev = std::max(Flags.isa_rev, S->isa_rev);
+      Flags.isa_ext = std::max(Flags.isa_ext, S->isa_ext);
+      Flags.gpr_size = std::max(Flags.gpr_size, S->gpr_size);
+      Flags.cpr1_size = std::max(Flags.cpr1_size, S->cpr1_size);
+      Flags.cpr2_size = std::max(Flags.cpr2_size, S->cpr2_size);
+      Flags.ases |= S->ases;
+      Flags.flags1 |= S->flags1;
+      Flags.flags2 |= S->flags2;
+      Flags.fp_abi = elf::getMipsFpAbiFlag(Flags.fp_abi, S->fp_abi, Filename);
+    }
   };
 
   if (Create)
