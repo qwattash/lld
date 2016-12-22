@@ -19,6 +19,7 @@
 #include "Error.h"
 #include "InputFiles.h"
 #include "LinkerScript.h"
+#include "Memory.h"
 #include "OutputSections.h"
 #include "Strings.h"
 #include "SymbolTable.h"
@@ -26,7 +27,6 @@
 #include "Threads.h"
 #include "Writer.h"
 #include "lld/Config/Version.h"
-#include "lld/Support/Memory.h"
 #include "llvm/Support/Dwarf.h"
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/MD5.h"
@@ -135,46 +135,36 @@ MipsAbiFlagsSection<ELFT> *MipsAbiFlagsSection<ELFT>::create() {
     Create = true;
 
     std::string Filename = toString(Sec->getFile());
-    const auto Size = Sec->Data.size();
-    constexpr auto ABIFlagsSize = sizeof(Elf_Mips_ABIFlags);
-    if (Size < ABIFlagsSize) {
+    const size_t Size = Sec->Data.size();
+    // Older version of BFD (such as the default FreeBSD linker) concatenate
+    // .MIPS.abiflags instead of merging. To allow for this case (or potential
+    // zero padding) we ignore everything after the first Elf_Mips_ABIFlags
+    if (Size < sizeof(Elf_Mips_ABIFlags)) {
       error(Filename + ": invalid size of .MIPS.abiflags section: got " +
-            Twine(Size) + " instead of " + Twine(ABIFlagsSize));
-      return nullptr;
-    }
-    // Older version of BFD concatenate .MIPS.abiflags instead of merging
-    if ((Size % ABIFlagsSize) != 0) {
-      error(Filename + ": invalid size of .MIPS.abiflags section: " +
-           Twine(Size) + " is not a multiple of " + Twine(ABIFlagsSize));
-    }
-    if (Size > ABIFlagsSize) {
-      warn(Filename + ": .MIPS.abiflags section has multiple entries: got " +
-          Twine(Size) + " instead of " + Twine(ABIFlagsSize) + " bytes");
+            Twine(Size) + " instead of " + Twine(sizeof(Elf_Mips_ABIFlags)));
       return nullptr;
     }
 
-    for (size_t Offset = 0; Offset < Size; Offset += ABIFlagsSize) {
-      auto *S = reinterpret_cast<const Elf_Mips_ABIFlags *>(Sec->Data.data() + Offset);
-      if (S->version != 0) {
-        error(Filename + ": unexpected .MIPS.abiflags version " +
-              Twine(S->version));
-        return nullptr;
-      }
-
-      // LLD checks ISA compatibility in getMipsEFlags(). Here we just
-      // select the highest number of ISA/Rev/Ext.
-      Flags.isa_level = std::max(Flags.isa_level, S->isa_level);
-      Flags.isa_rev = std::max(Flags.isa_rev, S->isa_rev);
-      Flags.isa_ext = std::max(Flags.isa_ext, S->isa_ext);
-      Flags.gpr_size = std::max(Flags.gpr_size, S->gpr_size);
-      Flags.cpr1_size = std::max(Flags.cpr1_size, S->cpr1_size);
-      Flags.cpr2_size = std::max(Flags.cpr2_size, S->cpr2_size);
-      Flags.ases |= S->ases;
-      Flags.flags1 |= S->flags1;
-      Flags.flags2 |= S->flags2;
-      Flags.fp_abi = elf::getMipsFpAbiFlag(Flags.fp_abi, S->fp_abi, Filename);
+    auto *S = reinterpret_cast<const Elf_Mips_ABIFlags *>(Sec->Data.data());
+    if (S->version != 0) {
+      error(Filename + ": unexpected .MIPS.abiflags version " +
+            Twine(S->version));
+      return nullptr;
     }
-  };
+
+    // LLD checks ISA compatibility in getMipsEFlags(). Here we just
+    // select the highest number of ISA/Rev/Ext.
+    Flags.isa_level = std::max(Flags.isa_level, S->isa_level);
+    Flags.isa_rev = std::max(Flags.isa_rev, S->isa_rev);
+    Flags.isa_ext = std::max(Flags.isa_ext, S->isa_ext);
+    Flags.gpr_size = std::max(Flags.gpr_size, S->gpr_size);
+    Flags.cpr1_size = std::max(Flags.cpr1_size, S->cpr1_size);
+    Flags.cpr2_size = std::max(Flags.cpr2_size, S->cpr2_size);
+    Flags.ases |= S->ases;
+    Flags.flags1 |= S->flags1;
+    Flags.flags2 |= S->flags2;
+    Flags.fp_abi = elf::getMipsFpAbiFlag(Flags.fp_abi, S->fp_abi, Filename);
+  }
 
   if (Create)
     return make<MipsAbiFlagsSection<ELFT>>(Flags);
@@ -1206,7 +1196,7 @@ const OutputSectionBase *
 SymbolTableSection<ELFT>::getOutputSection(SymbolBody *Sym) {
   switch (Sym->kind()) {
   case SymbolBody::DefinedSyntheticKind:
-    return cast<DefinedSynthetic<ELFT>>(Sym)->Section;
+    return cast<DefinedSynthetic>(Sym)->Section;
   case SymbolBody::DefinedRegularKind: {
     auto &D = cast<DefinedRegular<ELFT>>(*Sym);
     if (D.Section)

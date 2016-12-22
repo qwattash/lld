@@ -18,8 +18,8 @@
 #include "Config.h"
 #include "Error.h"
 #include "LinkerScript.h"
+#include "Memory.h"
 #include "Symbols.h"
-#include "lld/Support/Memory.h"
 #include "llvm/ADT/STLExtras.h"
 
 using namespace llvm;
@@ -255,6 +255,8 @@ template <class ELFT> Symbol *SymbolTable<ELFT>::addUndefined(StringRef Name) {
                       /*CanOmitFromDynSym*/ false, /*File*/ nullptr);
 }
 
+static uint8_t getVisibility(uint8_t StOther) { return StOther & 3; }
+
 template <class ELFT>
 Symbol *SymbolTable<ELFT>::addUndefined(StringRef Name, bool IsLocal,
                                         uint8_t Binding, uint8_t StOther,
@@ -263,7 +265,7 @@ Symbol *SymbolTable<ELFT>::addUndefined(StringRef Name, bool IsLocal,
   Symbol *S;
   bool WasInserted;
   std::tie(S, WasInserted) =
-      insert(Name, Type, StOther & 3, CanOmitFromDynSym, File);
+      insert(Name, Type, getVisibility(StOther), CanOmitFromDynSym, File);
   if (WasInserted) {
     S->Binding = Binding;
     replaceBody<Undefined>(S, Name, IsLocal, StOther, Type, File);
@@ -334,8 +336,8 @@ Symbol *SymbolTable<ELFT>::addCommon(StringRef N, uint64_t Size,
                                      InputFile *File) {
   Symbol *S;
   bool WasInserted;
-  std::tie(S, WasInserted) =
-      insert(N, Type, StOther & 3, /*CanOmitFromDynSym*/ false, File);
+  std::tie(S, WasInserted) = insert(N, Type, getVisibility(StOther),
+                                    /*CanOmitFromDynSym*/ false, File);
   int Cmp = compareDefined(S, WasInserted, Binding);
   if (Cmp > 0) {
     S->Binding = Binding;
@@ -395,7 +397,7 @@ Symbol *SymbolTable<ELFT>::addRegular(StringRef Name, uint8_t StOther,
                                       InputFile *File) {
   Symbol *S;
   bool WasInserted;
-  std::tie(S, WasInserted) = insert(Name, Type, StOther & 3,
+  std::tie(S, WasInserted) = insert(Name, Type, getVisibility(StOther),
                                     /*CanOmitFromDynSym*/ false, File);
   int Cmp = compareDefinedNonCommon<ELFT>(S, WasInserted, Binding,
                                           Section == nullptr, Value);
@@ -413,12 +415,12 @@ Symbol *SymbolTable<ELFT>::addSynthetic(StringRef N,
                                         uintX_t Value, uint8_t StOther) {
   Symbol *S;
   bool WasInserted;
-  std::tie(S, WasInserted) = insert(N, STT_NOTYPE, /*Visibility*/ StOther & 0x3,
+  std::tie(S, WasInserted) = insert(N, STT_NOTYPE, getVisibility(StOther),
                                     /*CanOmitFromDynSym*/ false, nullptr);
   int Cmp = compareDefinedNonCommon<ELFT>(S, WasInserted, STB_GLOBAL,
                                           /*IsAbsolute*/ false, /*Value*/ 0);
   if (Cmp > 0)
-    replaceBody<DefinedSynthetic<ELFT>>(S, N, Value, Section);
+    replaceBody<DefinedSynthetic>(S, N, Value, Section);
   else if (Cmp == 0)
     reportDuplicate(S->body(), nullptr);
   return S;
@@ -456,7 +458,7 @@ Symbol *SymbolTable<ELFT>::addBitcode(StringRef Name, uint8_t Binding,
   Symbol *S;
   bool WasInserted;
   std::tie(S, WasInserted) =
-      insert(Name, Type, StOther & 3, CanOmitFromDynSym, F);
+      insert(Name, Type, getVisibility(StOther), CanOmitFromDynSym, F);
   int Cmp = compareDefinedNonCommon<ELFT>(S, WasInserted, Binding,
                                           /*IsAbs*/ false, /*Value*/ 0);
   if (Cmp > 0)
@@ -566,54 +568,48 @@ template <class ELFT> void SymbolTable<ELFT>::scanShlibUndefined() {
 // So, if "extern C++" feature is used, we need to demangle all known
 // symbols.
 template <class ELFT>
-void SymbolTable<ELFT>::initDemangledSyms() {
-  if (DemangledSyms)
-    return;
-  DemangledSyms.emplace();
-
-  for (Symbol *Sym : SymVector) {
-    SymbolBody *B = Sym->body();
-    if (Optional<std::string> S = demangle(B->getName()))
-      (*DemangledSyms)[*S].push_back(B);
-    else
-      (*DemangledSyms)[B->getName()].push_back(B);
+StringMap<std::vector<SymbolBody *>> &SymbolTable<ELFT>::getDemangledSyms() {
+  if (!DemangledSyms) {
+    DemangledSyms.emplace();
+    for (Symbol *Sym : SymVector) {
+      SymbolBody *B = Sym->body();
+      if (B->isUndefined())
+        continue;
+      if (Optional<std::string> S = demangle(B->getName()))
+        (*DemangledSyms)[*S].push_back(B);
+      else
+        (*DemangledSyms)[B->getName()].push_back(B);
+    }
   }
+  return *DemangledSyms;
 }
 
 template <class ELFT>
 std::vector<SymbolBody *> SymbolTable<ELFT>::findByVersion(SymbolVersion Ver) {
-  if (Ver.IsExternCpp) {
-    initDemangledSyms();
-    auto I = DemangledSyms->find(Ver.Name);
-    if (I != DemangledSyms->end())
-      return I->second;
-    return {};
-  }
-  std::vector<SymbolBody *> Syms;
-  Syms.push_back(find(Ver.Name));
-  return Syms;
+  if (Ver.IsExternCpp)
+    return getDemangledSyms().lookup(Ver.Name);
+  if (SymbolBody *B = find(Ver.Name))
+    if (!B->isUndefined())
+      return {B};
+  return {};
 }
 
 template <class ELFT>
 std::vector<SymbolBody *>
 SymbolTable<ELFT>::findAllByVersion(SymbolVersion Ver) {
   std::vector<SymbolBody *> Res;
-  StringMatcher M({Ver.Name});
+  StringMatcher M(Ver.Name);
 
   if (Ver.IsExternCpp) {
-    initDemangledSyms();
-    for (auto &P : *DemangledSyms)
+    for (auto &P : getDemangledSyms())
       if (M.match(P.first()))
-        for (SymbolBody *Body : P.second)
-          if (!Body->isUndefined())
-            Res.push_back(Body);
+        Res.insert(Res.end(), P.second.begin(), P.second.end());
     return Res;
   }
 
   for (Symbol *Sym : SymVector) {
     SymbolBody *B = Sym->body();
-    StringRef Name = B->getName();
-    if (!B->isUndefined() && M.match(Name))
+    if (!B->isUndefined() && M.match(B->getName()))
       Res.push_back(B);
   }
   return Res;
@@ -632,8 +628,7 @@ template <class ELFT> void SymbolTable<ELFT>::handleAnonymousVersion() {
       continue;
     }
     for (SymbolBody *B : findByVersion(Ver))
-      if (B)
-        B->symbol()->VersionId = VER_NDX_GLOBAL;
+      B->symbol()->VersionId = VER_NDX_GLOBAL;
   }
 }
 
@@ -647,16 +642,15 @@ void SymbolTable<ELFT>::assignExactVersion(SymbolVersion Ver, uint16_t VersionId
 
   // Get a list of symbols which we need to assign the version to.
   std::vector<SymbolBody *> Syms = findByVersion(Ver);
+  if (Syms.empty()) {
+    if (Config->NoUndefinedVersion)
+      error("version script assignment of '" + VersionName + "' to symbol '" +
+            Ver.Name + "' failed: symbol not defined");
+    return;
+  }
 
   // Assign the version.
   for (SymbolBody *B : Syms) {
-    if (!B || B->isUndefined()) {
-      if (Config->NoUndefinedVersion)
-        error("version script assignment of '" + VersionName + "' to symbol '" +
-              Ver.Name + "' failed: symbol not defined");
-      continue;
-    }
-
     Symbol *Sym = B->symbol();
     if (Sym->InVersionScript)
       warn("duplicate symbol '" + Ver.Name + "' in version script");

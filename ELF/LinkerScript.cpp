@@ -15,6 +15,7 @@
 #include "Config.h"
 #include "Driver.h"
 #include "InputSection.h"
+#include "Memory.h"
 #include "OutputSections.h"
 #include "ScriptParser.h"
 #include "Strings.h"
@@ -23,7 +24,6 @@
 #include "SyntheticSections.h"
 #include "Target.h"
 #include "Writer.h"
-#include "lld/Support/Memory.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringRef.h"
@@ -78,8 +78,7 @@ template <class ELFT> static void addSynthetic(SymbolAssignment *Cmd) {
 
   // If we already know section then we can calculate symbol value immediately.
   if (Sec)
-    cast<DefinedSynthetic<ELFT>>(Cmd->Sym)->Value =
-        Cmd->Expression(0) - Sec->Addr;
+    cast<DefinedSynthetic>(Cmd->Sym)->Value = Cmd->Expression(0) - Sec->Addr;
 }
 
 static bool isUnderSysroot(StringRef Path) {
@@ -395,7 +394,7 @@ static void assignSectionSymbol(SymbolAssignment *Cmd,
   if (!Cmd->Sym)
     return;
 
-  if (auto *Body = dyn_cast<DefinedSynthetic<ELFT>>(Cmd->Sym)) {
+  if (auto *Body = dyn_cast<DefinedSynthetic>(Cmd->Sym)) {
     Body->Section = Cmd->Expression.Section();
     Body->Value = Cmd->Expression(Value) - Body->Section->Addr;
     return;
@@ -714,7 +713,7 @@ template <class ELFT> void LinkerScript<ELFT>::placeOrphanSections() {
 }
 
 template <class ELFT>
-void LinkerScript<ELFT>::assignAddresses(std::vector<PhdrEntry<ELFT>> &Phdrs) {
+void LinkerScript<ELFT>::assignAddresses(std::vector<PhdrEntry> &Phdrs) {
   // Assign addresses as instructed by linker script SECTIONS sub-commands.
   Dot = 0;
 
@@ -748,20 +747,10 @@ void LinkerScript<ELFT>::assignAddresses(std::vector<PhdrEntry<ELFT>> &Phdrs) {
   }
 
   uintX_t HeaderSize = getHeaderSize();
-  auto FirstPTLoad =
-      std::find_if(Phdrs.begin(), Phdrs.end(), [](const PhdrEntry<ELFT> &E) {
-        return E.H.p_type == PT_LOAD;
-      });
-  if (FirstPTLoad == Phdrs.end())
-    return;
-
   // If the linker script doesn't have PHDRS, add ElfHeader and ProgramHeaders
   // now that we know we have space.
-  if (HeaderSize <= MinVA && !hasPhdrsCommands()) {
-    FirstPTLoad->First = Out<ELFT>::ElfHeader;
-    if (!FirstPTLoad->Last)
-      FirstPTLoad->Last = Out<ELFT>::ProgramHeaders;
-  }
+  if (HeaderSize <= MinVA && !hasPhdrsCommands())
+    allocateHeaders<ELFT>(Phdrs, *OutputSections);
 
   // ELF and Program headers need to be right before the first section in
   // memory. Set their addresses accordingly.
@@ -771,15 +760,14 @@ void LinkerScript<ELFT>::assignAddresses(std::vector<PhdrEntry<ELFT>> &Phdrs) {
 }
 
 // Creates program headers as instructed by PHDRS linker script command.
-template <class ELFT>
-std::vector<PhdrEntry<ELFT>> LinkerScript<ELFT>::createPhdrs() {
-  std::vector<PhdrEntry<ELFT>> Ret;
+template <class ELFT> std::vector<PhdrEntry> LinkerScript<ELFT>::createPhdrs() {
+  std::vector<PhdrEntry> Ret;
 
   // Process PHDRS and FILEHDR keywords because they are not
   // real output sections and cannot be added in the following loop.
   for (const PhdrsCommand &Cmd : Opt.PhdrsCommands) {
     Ret.emplace_back(Cmd.Type, Cmd.Flags == UINT_MAX ? PF_R : Cmd.Flags);
-    PhdrEntry<ELFT> &Phdr = Ret.back();
+    PhdrEntry &Phdr = Ret.back();
 
     if (Cmd.HasFilehdr)
       Phdr.add(Out<ELFT>::ElfHeader);
@@ -787,7 +775,7 @@ std::vector<PhdrEntry<ELFT>> LinkerScript<ELFT>::createPhdrs() {
       Phdr.add(Out<ELFT>::ProgramHeaders);
 
     if (Cmd.LMAExpr) {
-      Phdr.H.p_paddr = Cmd.LMAExpr(0);
+      Phdr.p_paddr = Cmd.LMAExpr(0);
       Phdr.HasLMA = true;
     }
   }
@@ -801,7 +789,7 @@ std::vector<PhdrEntry<ELFT>> LinkerScript<ELFT>::createPhdrs() {
     for (size_t Id : getPhdrIndices(Sec->getName())) {
       Ret[Id].add(Sec);
       if (Opt.PhdrsCommands[Id].Flags == UINT_MAX)
-        Ret[Id].H.p_flags |= Sec->getPhdrFlags();
+        Ret[Id].p_flags |= Sec->getPhdrFlags();
     }
   }
   return Ret;
@@ -913,10 +901,11 @@ template <class ELFT> uint64_t LinkerScript<ELFT>::getHeaderSize() {
   return elf::getHeaderSize<ELFT>();
 }
 
-template <class ELFT> uint64_t LinkerScript<ELFT>::getSymbolValue(StringRef S) {
+template <class ELFT>
+uint64_t LinkerScript<ELFT>::getSymbolValue(const Twine &Loc, StringRef S) {
   if (SymbolBody *B = Symtab<ELFT>::X->find(S))
     return B->getVA<ELFT>();
-  error("symbol not found: " + S);
+  error(Loc + ": symbol not found: " + S);
   return 0;
 }
 
@@ -944,7 +933,7 @@ const OutputSectionBase *LinkerScript<ELFT>::getSymbolSection(StringRef S) {
 
   if (auto *DR = dyn_cast_or_null<DefinedRegular<ELFT>>(Sym))
     return DR->Section ? DR->Section->OutSec : nullptr;
-  if (auto *DS = dyn_cast_or_null<DefinedSynthetic<ELFT>>(Sym))
+  if (auto *DS = dyn_cast_or_null<DefinedSynthetic>(Sym))
     return DS->Section;
 
   return nullptr;
@@ -1041,7 +1030,6 @@ private:
 
   ScriptConfiguration &Opt = *ScriptConfig;
   bool IsUnderSysroot;
-  std::vector<std::unique_ptr<MemoryBuffer>> OwningMBs;
 };
 
 void ScriptParser::readDynamicList() {
@@ -1184,15 +1172,20 @@ void ScriptParser::readGroup() {
 }
 
 void ScriptParser::readInclude() {
-  StringRef Tok = next();
-  auto MBOrErr = MemoryBuffer::getFile(unquote(Tok));
+  StringRef Tok = unquote(next());
+  // https://sourceware.org/binutils/docs/ld/File-Commands.html:
+  // The file will be searched for in the current directory, and in any
+  // directory specified with the -L option.
+  auto MBOrErr = MemoryBuffer::getFile(Tok);
+  if (!MBOrErr)
+    if (Optional<std::string> Path = findFromSearchPaths(Tok))
+      MBOrErr = MemoryBuffer::getFile(*Path);
   if (!MBOrErr) {
     setError("cannot open " + Tok);
     return;
   }
   std::unique_ptr<MemoryBuffer> &MB = *MBOrErr;
-  tokenize(MB->getMemBufferRef());
-  OwningMBs.push_back(std::move(MB));
+  tokenize({Saver.save(MB->getBuffer()), unquote(Tok)});
 }
 
 void ScriptParser::readOutput() {
@@ -1531,10 +1524,10 @@ SymbolAssignment *ScriptParser::readProvideOrAssignment(StringRef Tok) {
   return Cmd;
 }
 
-static uint64_t getSymbolValue(StringRef S, uint64_t Dot) {
+static uint64_t getSymbolValue(const Twine &Loc, StringRef S, uint64_t Dot) {
   if (S == ".")
     return Dot;
-  return ScriptBase->getSymbolValue(S);
+  return ScriptBase->getSymbolValue(Loc, S);
 }
 
 static bool isAbsolute(StringRef S) {
@@ -1555,8 +1548,12 @@ SymbolAssignment *ScriptParser::readAssignment(StringRef Name) {
   } else {
     E = readExpr();
   }
-  if (Op == "+=")
-    E = [=](uint64_t Dot) { return getSymbolValue(Name, Dot) + E(Dot); };
+  if (Op == "+=") {
+    std::string Loc = getCurrentLocation();
+    E = [=](uint64_t Dot) {
+      return getSymbolValue(Loc, Name, Dot) + E(Dot);
+    };
+  }
   return new SymbolAssignment(Name, E);
 }
 
@@ -1808,7 +1805,7 @@ Expr ScriptParser::readPrimary() {
   // Tok is a symbol name.
   if (Tok != "." && !isValidCIdentifier(Tok))
     setError("malformed number: " + Tok);
-  return {[=](uint64_t Dot) { return getSymbolValue(Tok, Dot); },
+  return {[=](uint64_t Dot) { return getSymbolValue(Location, Tok, Dot); },
           [=] { return isAbsolute(Tok); },
           [=] { return ScriptBase->getSymbolSection(Tok); }};
 }
