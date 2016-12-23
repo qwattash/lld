@@ -1551,16 +1551,16 @@ template <class ELFT> void Writer<ELFT>::fixAbsoluteSymbols() {
           Gp = OS->Addr;
       if (Gp != (uintX_t)-1) {
         ElfSym<ELFT>::MipsGp->Value = Gp + 0x7ff0;
-        errs() << format("Set _gp to %lx\n", ElfSym<ELFT>::MipsGp->Value);
+        // errs() << format("Set _gp to %lx\n", ElfSym<ELFT>::MipsGp->Value);
       }
     }
     if (ElfSym<ELFT>::MipsGpDisp) {
       ElfSym<ELFT>::MipsGpDisp->Value = ElfSym<ELFT>::MipsGp->Value;
-      errs() << format("Set _gp_disp to %lx\n", ElfSym<ELFT>::MipsGp->Value);
+      // errs() << format("Set _gp_disp to %lx\n", ElfSym<ELFT>::MipsGp->Value);
     }
     if (ElfSym<ELFT>::MipsLocalGp) {
       ElfSym<ELFT>::MipsLocalGp->Value = ElfSym<ELFT>::MipsGp->Value;
-      errs() << format("Set _gp_local to %lx\n", ElfSym<ELFT>::MipsGp->Value);
+      // errs() << format("Set _gp_local to %lx\n", ElfSym<ELFT>::MipsGp->Value);
     }
   }
 }

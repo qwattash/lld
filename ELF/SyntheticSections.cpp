@@ -182,10 +182,8 @@ template <class ELFT> void MipsOptionsSection<ELFT>::writeTo(uint8_t *Buf) {
   Options->kind = ODK_REGINFO;
   Options->size = getSize();
 
-  if (!Config->Relocatable) {
+  if (!Config->Relocatable)
     Reginfo.ri_gp_value = In<ELFT>::MipsGot->getGp();
-    errs() << format("Writing gp: reginfo.ri_gp: %lx, gp: %lx\n", (unsigned long)Reginfo.ri_gp_value, In<ELFT>::MipsGot->getGp());
-  }
   memcpy(Buf + sizeof(Elf_Mips_Options), &Reginfo, sizeof(Reginfo));
 }
 
