@@ -116,6 +116,7 @@ struct Configuration {
   bool ICF;
   bool Mips64EL = false;
   bool MipsN32Abi = false;
+  bool MipsCheriAbi = false;
   bool NoGnuUnique;
   bool NoUndefinedVersion;
   bool Nostdlib;
