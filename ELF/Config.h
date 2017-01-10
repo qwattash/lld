@@ -146,7 +146,6 @@ struct Configuration {
   bool ZRelro;
   bool ExitEarly;
   bool ZWxneeded;
-  bool AllowAbsoluteRelocsInPic;
   DiscardPolicy Discard;
   SortSectionPolicy SortSection;
   StripPolicy Strip = StripPolicy::None;
