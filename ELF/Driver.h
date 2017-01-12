@@ -29,11 +29,9 @@ public:
   void main(ArrayRef<const char *> Args, bool CanExitEarly);
   void addFile(StringRef Path);
   void addLibrary(StringRef Name);
-  std::unique_ptr<CpioFile> Cpio; // for reproduce
 
 private:
   std::vector<MemoryBufferRef> getArchiveMembers(MemoryBufferRef MB);
-  llvm::Optional<MemoryBufferRef> readFile(StringRef Path);
   void readConfigs(llvm::opt::InputArgList &Args);
   void createFiles(llvm::opt::InputArgList &Args);
   void inferMachineType();
