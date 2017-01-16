@@ -491,6 +491,16 @@ static int getPPC64SectionRank(StringRef SectionName) {
       .Default(1);
 }
 
+// All sections with SHF_MIPS_GPREL flag should be grouped together
+// because data in these sections is addressable with a gp relative address.
+static int getMipsSectionRank(const OutputSectionBase *S) {
+  if ((S->Flags & SHF_MIPS_GPREL) == 0)
+    return 0;
+  if (S->getName() == ".got")
+    return 1;
+  return 2;
+}
+
 template <class ELFT> bool elf::isRelroSection(const OutputSectionBase *Sec) {
   if (!Config->ZRelro)
     return false;
@@ -508,8 +518,6 @@ template <class ELFT> bool elf::isRelroSection(const OutputSectionBase *Sec) {
   if (Sec == In<ELFT>::Dynamic->OutSec)
     return true;
   if (In<ELFT>::Got && Sec == In<ELFT>::Got->OutSec)
-    return true;
-  if (In<ELFT>::MipsGot && Sec == In<ELFT>::MipsGot->OutSec)
     return true;
   if (Sec == Out<ELFT>::BssRelRo)
     return true;
@@ -610,6 +618,8 @@ static bool compareSectionsNonScript(const OutputSectionBase *A,
   if (Config->EMachine == EM_PPC64)
     return getPPC64SectionRank(A->getName()) <
            getPPC64SectionRank(B->getName());
+  if (Config->EMachine == EM_MIPS)
+    return getMipsSectionRank(A) < getMipsSectionRank(B);
 
   return false;
 }
