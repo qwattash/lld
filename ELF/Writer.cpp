@@ -238,7 +238,11 @@ template <class ELFT> void Writer<ELFT>::run() {
   if (ErrorCount)
     return;
 
+  // Handle -Map option.
   writeMapFile<ELFT>(OutputSections);
+  if (ErrorCount)
+    return;
+
   if (auto EC = Buffer->commit())
     error("failed to write to the output file: " + EC.message());
 
