@@ -733,17 +733,7 @@ void LinkerScript<ELFT>::assignAddresses(std::vector<PhdrEntry> &Phdrs) {
       Sec->Addr = 0;
   }
 
-  uintX_t HeaderSize = getHeaderSize();
-  // If the linker script doesn't have PHDRS, add ElfHeader and ProgramHeaders
-  // now that we know we have space.
-  if (HeaderSize <= MinVA && !hasPhdrsCommands())
-    allocateHeaders<ELFT>(Phdrs, *OutputSections);
-
-  // ELF and Program headers need to be right before the first section in
-  // memory. Set their addresses accordingly.
-  MinVA = alignDown(MinVA - HeaderSize, Config->MaxPageSize);
-  Out<ELFT>::ElfHeader->Addr = MinVA;
-  Out<ELFT>::ProgramHeaders->Addr = Out<ELFT>::ElfHeader->Size + MinVA;
+  allocateHeaders<ELFT>(Phdrs, *OutputSections, MinVA);
 }
 
 // Creates program headers as instructed by PHDRS linker script command.
@@ -918,12 +908,7 @@ const OutputSectionBase *LinkerScript<ELFT>::getSymbolSection(StringRef S) {
     return CurOutSec ? CurOutSec : (*OutputSections)[0];
   }
 
-  if (auto *DR = dyn_cast_or_null<DefinedRegular<ELFT>>(Sym))
-    return DR->Section ? DR->Section->OutSec : nullptr;
-  if (auto *DS = dyn_cast_or_null<DefinedSynthetic>(Sym))
-    return DS->Section;
-
-  return nullptr;
+  return SymbolTableSection<ELFT>::getOutputSection(Sym);
 }
 
 // Returns indices of ELF headers containing specific section, identified
@@ -1454,6 +1439,10 @@ ScriptParser::readOutputSectionDescription(StringRef OutSec) {
     } else if (Tok == "ASSERT") {
       Cmd->Commands.emplace_back(new AssertCommand(readAssert()));
       expect(";");
+    } else if (Tok == "CONSTRUCTORS") {
+      // CONSTRUCTORS is a keyword to make the linker recognize C++ ctors/dtors
+      // by name. This is for very old file formats such as ECOFF/XCOFF.
+      // For ELF, we should ignore.
     } else if (Tok == "FILL") {
       Cmd->Filler = readFill();
     } else if (Tok == "SORT") {
