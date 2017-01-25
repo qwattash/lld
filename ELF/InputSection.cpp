@@ -237,6 +237,10 @@ template <class RelTy>
 void InputSection<ELFT>::copyRelocations(uint8_t *Buf, ArrayRef<RelTy> Rels) {
   InputSectionBase<ELFT> *RelocatedSection = getRelocatedSection();
 
+  // Loop is slow and have complexity O(N*M), where N - amount of
+  // relocations and M - amount of symbols in symbol table.
+  // That happens because getSymbolIndex(...) call below performs
+  // simple linear search.
   for (const RelTy &Rel : Rels) {
     uint32_t Type = Rel.getType(Config->Mips64EL);
     SymbolBody &Body = this->File->getRelocTargetSym(Rel);
@@ -247,7 +251,8 @@ void InputSection<ELFT>::copyRelocations(uint8_t *Buf, ArrayRef<RelTy> Rels) {
     if (Config->Rela)
       P->r_addend = getAddend<ELFT>(Rel);
     P->r_offset = RelocatedSection->getOffset(Rel.r_offset);
-    P->setSymbolAndType(Body.DynsymIndex, Type, Config->Mips64EL);
+    P->setSymbolAndType(In<ELFT>::SymTab->getSymbolIndex(&Body), Type,
+                        Config->Mips64EL);
   }
 }
 

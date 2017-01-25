@@ -467,11 +467,7 @@ template <class ELFT> void Writer<ELFT>::copyLocalSymbols() {
       InputSectionBase<ELFT> *Sec = DR->Section;
       if (!shouldKeepInSymtab<ELFT>(Sec, B->getName(), *B))
         continue;
-      ++In<ELFT>::SymTab->NumLocals;
-      if (Config->Relocatable)
-        B->DynsymIndex = In<ELFT>::SymTab->NumLocals;
-      F->KeptLocalSyms.push_back(std::make_pair(
-          DR, In<ELFT>::SymTab->StrTabSec.addString(B->getName())));
+      In<ELFT>::SymTab->addLocal(B);
     }
   }
 }
@@ -1036,6 +1032,11 @@ template <class ELFT> void Writer<ELFT>::finalizeSections() {
   // we can correctly decide if a dynamic relocation is needed.
   forEachRelSec(scanRelocations<ELFT>);
 
+  if (In<ELFT>::Plt && !In<ELFT>::Plt->empty())
+    In<ELFT>::Plt->addSymbols();
+  if (In<ELFT>::Iplt && !In<ELFT>::Iplt->empty())
+    In<ELFT>::Iplt->addSymbols();
+
   // Now that we have defined all possible symbols including linker-
   // synthesized ones. Visit all symbols to give the finishing touches.
   for (Symbol *S : Symtab<ELFT>::X->getSymbols()) {
@@ -1044,10 +1045,10 @@ template <class ELFT> void Writer<ELFT>::finalizeSections() {
     if (!includeInSymtab<ELFT>(*Body))
       continue;
     if (In<ELFT>::SymTab)
-      In<ELFT>::SymTab->addSymbol(Body);
+      In<ELFT>::SymTab->addGlobal(Body);
 
     if (In<ELFT>::DynSymTab && S->includeInDynsym()) {
-      In<ELFT>::DynSymTab->addSymbol(Body);
+      In<ELFT>::DynSymTab->addGlobal(Body);
       if (auto *SS = dyn_cast<SharedSymbol<ELFT>>(Body))
         if (SS->file()->isNeeded())
           In<ELFT>::VerNeed->addSymbol(SS);
