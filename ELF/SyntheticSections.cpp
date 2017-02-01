@@ -1915,7 +1915,7 @@ void ARMExidxSentinelSection<ELFT>::writeTo(uint8_t *Buf) {
 
 template <class ELFT>
 ThunkSection<ELFT>::ThunkSection(OutputSectionBase *OS, uint64_t Off)
-    : SyntheticSection<ELFT>(SHF_ALLOC, SHT_PROGBITS,
+    : SyntheticSection<ELFT>(SHF_ALLOC | SHF_EXECINSTR, SHT_PROGBITS,
                              sizeof(typename ELFT::uint), ".text.thunk") {
   this->OutSec = OS;
   this->OutSecOff = Off;
@@ -1932,6 +1932,12 @@ template <class ELFT> void ThunkSection<ELFT>::addThunk(Thunk<ELFT> *T) {
 template <class ELFT> void ThunkSection<ELFT>::writeTo(uint8_t *Buf) {
   for (const Thunk<ELFT> *T : Thunks)
     T->writeTo(Buf + T->Offset, *this);
+}
+
+template <class ELFT>
+InputSection<ELFT> *ThunkSection<ELFT>::getTargetInputSection() const {
+  const Thunk<ELFT> *T = Thunks.front();
+  return T->getTargetInputSection();
 }
 
 template InputSection<ELF32LE> *elf::createCommonSection();

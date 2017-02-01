@@ -713,6 +713,7 @@ public:
   void addThunk(Thunk<ELFT> *T);
   size_t getSize() const override { return Size; }
   void writeTo(uint8_t *Buf) override;
+  InputSection<ELFT> *getTargetInputSection() const;
 
 private:
   std::vector<const Thunk<ELFT> *> Thunks;

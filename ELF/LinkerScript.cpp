@@ -288,7 +288,7 @@ void LinkerScript<ELFT>::addSection(OutputSectionFactory<ELFT> &Factory,
                                     StringRef Name) {
   OutputSectionBase *OutSec;
   bool IsNew;
-  std::tie(OutSec, IsNew) = Factory.create(Sec, Name, true);
+  std::tie(OutSec, IsNew) = Factory.create(Sec, Name);
   if (IsNew)
     OutputSections->push_back(OutSec);
   OutSec->addSection(Sec);
@@ -1493,7 +1493,9 @@ ScriptParser::readOutputSectionDescription(StringRef OutSec) {
 
   while (!Error && !consume("}")) {
     StringRef Tok = next();
-    if (SymbolAssignment *Assignment = readProvideOrAssignment(Tok)) {
+    if (Tok == ";") {
+      // Empty commands are allowed. Do nothing here.
+    } else if (SymbolAssignment *Assignment = readProvideOrAssignment(Tok)) {
       Cmd->Commands.emplace_back(Assignment);
     } else if (BytesDataCommand *Data = readBytesDataCommand(Tok)) {
       Cmd->Commands.emplace_back(Data);
@@ -1609,6 +1611,12 @@ SymbolAssignment *ScriptParser::readAssignment(StringRef Name) {
 Expr ScriptParser::readExpr() { return readExpr1(readPrimary(), 0); }
 
 static Expr combine(StringRef Op, Expr L, Expr R) {
+  auto IsAbs = [=] { return L.IsAbsolute() && R.IsAbsolute(); };
+  auto GetOutSec = [=] {
+    const OutputSectionBase *S = L.Section();
+    return S ? S : R.Section();
+  };
+
   if (Op == "*")
     return [=](uint64_t Dot) { return L(Dot) * R(Dot); };
   if (Op == "/") {
@@ -1622,14 +1630,9 @@ static Expr combine(StringRef Op, Expr L, Expr R) {
     };
   }
   if (Op == "+")
-    return {[=](uint64_t Dot) { return L(Dot) + R(Dot); },
-            [=] { return L.IsAbsolute() && R.IsAbsolute(); },
-            [=] {
-              const OutputSectionBase *S = L.Section();
-              return S ? S : R.Section();
-            }};
+    return {[=](uint64_t Dot) { return L(Dot) + R(Dot); }, IsAbs, GetOutSec};
   if (Op == "-")
-    return [=](uint64_t Dot) { return L(Dot) - R(Dot); };
+    return {[=](uint64_t Dot) { return L(Dot) - R(Dot); }, IsAbs, GetOutSec};
   if (Op == "<<")
     return [=](uint64_t Dot) { return L(Dot) << R(Dot); };
   if (Op == ">>")

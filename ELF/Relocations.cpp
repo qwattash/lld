@@ -562,17 +562,17 @@ static typename ELFT::uint computeAddend(const elf::ObjectFile<ELFT> &File,
 template <class ELFT>
 static void reportUndefined(SymbolBody &Sym, InputSectionBase<ELFT> &S,
                             typename ELFT::uint Offset) {
-  if (Config->UnresolvedSymbols == UnresolvedPolicy::Ignore)
-    return;
-
-  if (Config->Shared && Sym.symbol()->Visibility == STV_DEFAULT &&
-      Config->UnresolvedSymbols != UnresolvedPolicy::NoUndef)
+  bool CanBeExternal = Sym.symbol()->computeBinding() != STB_LOCAL &&
+                       Sym.getVisibility() == STV_DEFAULT;
+  if (Config->UnresolvedSymbols == UnresolvedPolicy::IgnoreAll ||
+      (Config->UnresolvedSymbols == UnresolvedPolicy::Ignore && CanBeExternal))
     return;
 
   std::string Msg =
       S.getLocation(Offset) + ": undefined symbol '" + toString(Sym) + "'";
 
-  if (Config->UnresolvedSymbols == UnresolvedPolicy::Warn)
+  if (Config->UnresolvedSymbols == UnresolvedPolicy::WarnAll ||
+      (Config->UnresolvedSymbols == UnresolvedPolicy::Warn && CanBeExternal))
     warn(Msg);
   else
     error(Msg);
@@ -825,16 +825,17 @@ static void mergeThunks(OutputSection<ELFT> *OS,
   // Merge sorted vectors of Thunks and InputSections by OutSecOff
   std::vector<InputSection<ELFT> *> Tmp;
   Tmp.reserve(OS->Sections.size() + Thunks.size());
-  auto MergeCmp = [](const ThunkSection<ELFT> *Thunk,
-                     const InputSection<ELFT> *IS) {
-    // All thunks go before any non-executable InputSections
-    if ((IS->Flags & SHF_EXECINSTR) == 0)
+  auto MergeCmp = [](const InputSection<ELFT> *A, const InputSection<ELFT> *B) {
+    // std::merge requires a strict weak ordering.
+    if (A->OutSecOff < B->OutSecOff)
       return true;
-    // Some Thunk Sections such as the Mips LA25 thunk must be placed before
-    // the InputSections that they target. We represent this by assigning the
-    // ThunkSection the same OutSecOff and always placing the Thunk first if
-    // the OutSecOff values are the same.
-    return Thunk->OutSecOff <= IS->OutSecOff;
+    if (A->OutSecOff == B->OutSecOff)
+      // Check if Thunk is immediately before any specific Target InputSection
+      // for example Mips LA25 Thunks.
+      if (auto *TA = dyn_cast<ThunkSection<ELFT>>(A))
+        if (TA && TA->getTargetInputSection() == B)
+          return true;
+    return false;
   };
   std::merge(OS->Sections.begin(), OS->Sections.end(), Thunks.begin(),
              Thunks.end(), std::back_inserter(Tmp), MergeCmp);
@@ -882,10 +883,17 @@ void createThunks(ArrayRef<OutputSectionBase *> OutputSections) {
     ThunkedSections[IS] = TS;
     return TS;
   };
-  // Find or create a ThunkSection to be placed at the end of OS
+  // Find or create a ThunkSection to be placed as last executable section in
+  // OS.
   auto GetOSThunkSec = [&](ThunkSection<ELFT> *&TS, OutputSection<ELFT> *OS) {
     if (TS == nullptr) {
-      TS = make<ThunkSection<ELFT>>(OS, OS->Size);
+      uint32_t Off = 0;
+      for (auto *IS : OS->Sections) {
+        Off = IS->OutSecOff + IS->getSize();
+        if ((IS->Flags & SHF_EXECINSTR) == 0)
+          break;
+      }
+      TS = make<ThunkSection<ELFT>>(OS, Off);
       ThunkSections[OS].push_back(TS);
     }
     return TS;
