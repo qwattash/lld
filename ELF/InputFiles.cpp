@@ -324,7 +324,7 @@ void elf::ObjectFile<ELFT>::initializeSections(
         fatal(toString(this) + ": invalid sh_link index: " +
               Twine(Sec.sh_link));
       auto *IS = cast<InputSection<ELFT>>(Sections[Sec.sh_link]);
-      IS->DependentSection = Sections[I];
+      IS->DependentSections.push_back(Sections[I]);
     }
   }
 }
@@ -368,17 +368,20 @@ elf::ObjectFile<ELFT>::createInputSection(const Elf_Shdr &Sec,
     return &InputSection<ELFT>::Discarded;
   case SHT_RELA:
   case SHT_REL: {
+    // Find the relocation target section and associate this
+    // section with it. Target can be discarded, for example
+    // if it is a duplicated member of SHT_GROUP section, we
+    // do not create or proccess relocatable sections then.
+    InputSectionBase<ELFT> *Target = getRelocTarget(Sec);
+    if (!Target)
+      return nullptr;
+
     // This section contains relocation information.
     // If -r is given, we do not interpret or apply relocation
     // but just copy relocation sections to output.
     if (Config->Relocatable)
       return make<InputSection<ELFT>>(this, &Sec, Name);
 
-    // Find the relocation target section and associate this
-    // section with it.
-    InputSectionBase<ELFT> *Target = getRelocTarget(Sec);
-    if (!Target)
-      return nullptr;
     if (Target->FirstRelocation)
       fatal(toString(this) +
             ": multiple relocation sections to one section are not supported");
@@ -400,6 +403,13 @@ elf::ObjectFile<ELFT>::createInputSection(const Elf_Shdr &Sec,
     }
     assert(isUInt<31>(NumRelocations));
     Target->NumRelocations = NumRelocations;
+
+    // Relocation sections processed by the linker are usually removed
+    // from the output, so returning `nullptr` for the normal case.
+    // However, if -emit-relocs is given, we need to leave them in the output.
+    // (Some post link analysis tools need this information.)
+    if (Config->EmitRelocs)
+      return make<InputSection<ELFT>>(this, &Sec, Name);
     return nullptr;
   }
   }

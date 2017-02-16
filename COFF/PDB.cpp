@@ -96,8 +96,8 @@ static std::vector<uint8_t> mergeDebugT(SymbolTable *Symtab) {
     msf::StreamReader Reader(Stream);
     if (auto EC = Reader.readArray(Types, Reader.getLength()))
       fatal(EC, "Reader::readArray failed");
-    if (!codeview::mergeTypeStreams(Builder, Types))
-      fatal("codeview::mergeTypeStreams failed");
+    if (auto Err = codeview::mergeTypeStreams(Builder, Types))
+      fatal(Err, "codeview::mergeTypeStreams failed");
   }
 
   // Construct section contents.
@@ -178,9 +178,12 @@ void coff::createPDB(StringRef Path, SymbolTable *Symtab,
 
   // Add an Info stream.
   auto &InfoBuilder = Builder.getInfoBuilder();
-  InfoBuilder.setAge(DI->PDB70.Age);
-  InfoBuilder.setGuid(
-      *reinterpret_cast<const pdb::PDB_UniqueId *>(&DI->PDB70.Signature));
+  InfoBuilder.setAge(DI ? DI->PDB70.Age : 0);
+
+  pdb::PDB_UniqueId uuid{};
+  if (DI)
+    memcpy(&uuid, &DI->PDB70.Signature, sizeof(uuid));
+  InfoBuilder.setGuid(uuid);
   // Should be the current time, but set 0 for reproducibilty.
   InfoBuilder.setSignature(0);
   InfoBuilder.setVersion(pdb::PdbRaw_ImplVer::PdbImplVC70);

@@ -121,7 +121,7 @@ class X86TargetInfo final : public TargetInfo {
 public:
   X86TargetInfo();
   RelExpr getRelExpr(uint32_t Type, const SymbolBody &S) const override;
-  uint64_t getImplicitAddend(const uint8_t *Buf, uint32_t Type) const override;
+  int64_t getImplicitAddend(const uint8_t *Buf, uint32_t Type) const override;
   void writeGotPltHeader(uint8_t *Buf) const override;
   uint32_t getDynRel(uint32_t Type) const override;
   bool isTlsLocalDynamicRel(uint32_t Type) const override;
@@ -218,7 +218,7 @@ public:
   RelExpr getRelExpr(uint32_t Type, const SymbolBody &S) const override;
   bool isPicRel(uint32_t Type) const override;
   uint32_t getDynRel(uint32_t Type) const override;
-  uint64_t getImplicitAddend(const uint8_t *Buf, uint32_t Type) const override;
+  int64_t getImplicitAddend(const uint8_t *Buf, uint32_t Type) const override;
   bool isTlsLocalDynamicRel(uint32_t Type) const override;
   bool isTlsGlobalDynamicRel(uint32_t Type) const override;
   bool isTlsInitialExecRel(uint32_t Type) const override;
@@ -238,7 +238,7 @@ template <class ELFT> class MipsTargetInfo final : public TargetInfo {
 public:
   MipsTargetInfo();
   RelExpr getRelExpr(uint32_t Type, const SymbolBody &S) const override;
-  uint64_t getImplicitAddend(const uint8_t *Buf, uint32_t Type) const override;
+  int64_t getImplicitAddend(const uint8_t *Buf, uint32_t Type) const override;
   bool isPicRel(uint32_t Type) const override;
   uint32_t getDynRel(uint32_t Type) const override;
   bool isTlsLocalDynamicRel(uint32_t Type) const override;
@@ -294,8 +294,7 @@ TargetInfo *createTarget() {
 
 TargetInfo::~TargetInfo() {}
 
-uint64_t TargetInfo::getImplicitAddend(const uint8_t *Buf,
-                                       uint32_t Type) const {
+int64_t TargetInfo::getImplicitAddend(const uint8_t *Buf, uint32_t Type) const {
   return 0;
 }
 
@@ -450,7 +449,7 @@ bool X86TargetInfo::isTlsInitialExecRel(uint32_t Type) const {
 void X86TargetInfo::writePltHeader(uint8_t *Buf) const {
   // Executable files and shared object files have
   // separate procedure linkage tables.
-  if (Config->Pic) {
+  if (Config->pic()) {
     const uint8_t V[] = {
         0xff, 0xb3, 0x04, 0x00, 0x00, 0x00, // pushl 4(%ebx)
         0xff, 0xa3, 0x08, 0x00, 0x00, 0x00, // jmp   *8(%ebx)
@@ -482,24 +481,24 @@ void X86TargetInfo::writePlt(uint8_t *Buf, uint64_t GotEntryAddr,
   memcpy(Buf, Inst, sizeof(Inst));
 
   // jmp *foo@GOT(%ebx) or jmp *foo_in_GOT
-  Buf[1] = Config->Pic ? 0xa3 : 0x25;
+  Buf[1] = Config->pic() ? 0xa3 : 0x25;
   uint32_t Got = In<ELF32LE>::GotPlt->getVA();
   write32le(Buf + 2, Config->Shared ? GotEntryAddr - Got : GotEntryAddr);
   write32le(Buf + 7, RelOff);
   write32le(Buf + 12, -Index * PltEntrySize - PltHeaderSize - 16);
 }
 
-uint64_t X86TargetInfo::getImplicitAddend(const uint8_t *Buf,
-                                          uint32_t Type) const {
+int64_t X86TargetInfo::getImplicitAddend(const uint8_t *Buf,
+                                         uint32_t Type) const {
   switch (Type) {
   default:
     return 0;
   case R_386_8:
   case R_386_PC8:
-    return *Buf;
+    return SignExtend64<8>(*Buf);
   case R_386_16:
   case R_386_PC16:
-    return read16le(Buf);
+    return SignExtend64<16>(read16le(Buf));
   case R_386_32:
   case R_386_GOT32:
   case R_386_GOT32X:
@@ -508,7 +507,7 @@ uint64_t X86TargetInfo::getImplicitAddend(const uint8_t *Buf,
   case R_386_PC32:
   case R_386_PLT32:
   case R_386_TLS_LE:
-    return read32le(Buf);
+    return SignExtend64<32>(read32le(Buf));
   }
 }
 
@@ -519,11 +518,17 @@ void X86TargetInfo::relocateOne(uint8_t *Loc, uint32_t Type,
   // we want to support them.
   switch (Type) {
   case R_386_8:
+    checkUInt<8>(Loc, Val, Type);
+    *Loc = Val;
+    break;
   case R_386_PC8:
     checkInt<8>(Loc, Val, Type);
     *Loc = Val;
     break;
   case R_386_16:
+    checkUInt<16>(Loc, Val, Type);
+    write16le(Loc, Val);
+    break;
   case R_386_PC16:
     checkInt<16>(Loc, Val, Type);
     write16le(Loc, Val);
@@ -652,6 +657,7 @@ RelExpr X86_64TargetInfo<ELFT>::getRelExpr(uint32_t Type,
                                            const SymbolBody &S) const {
   switch (Type) {
   case R_X86_64_8:
+  case R_X86_64_16:
   case R_X86_64_32:
   case R_X86_64_32S:
   case R_X86_64_64:
@@ -881,6 +887,10 @@ void X86_64TargetInfo<ELFT>::relocateOne(uint8_t *Loc, uint32_t Type,
     checkUInt<8>(Loc, Val, Type);
     *Loc = Val;
     break;
+  case R_X86_64_16:
+    checkUInt<16>(Loc, Val, Type);
+    write16le(Loc, Val);
+    break;
   case R_X86_64_32:
     checkUInt<32>(Loc, Val, Type);
     write32le(Loc, Val);
@@ -937,7 +947,7 @@ RelExpr X86_64TargetInfo<ELFT>::adjustRelaxExpr(uint32_t Type,
   // We also don't relax test/binop instructions without REX byte,
   // they are 32bit operations and not common to have.
   assert(Type == R_X86_64_REX_GOTPCRELX);
-  return Config->Pic ? RelExpr : R_RELAX_GOT_PC_NOPIC;
+  return Config->pic() ? RelExpr : R_RELAX_GOT_PC_NOPIC;
 }
 
 // A subset of relaxations can only be applied for no-PIC. This method
@@ -1024,7 +1034,7 @@ void X86_64TargetInfo<ELFT>::relaxGot(uint8_t *Loc, uint64_t Val) const {
   if (Op != 0xff) {
     // We are relaxing a rip relative to an absolute, so compensate
     // for the old -4 addend.
-    assert(!Config->Pic);
+    assert(!Config->pic());
     relaxGotNoPic(Loc, Val + 4, Op, ModRm);
     return;
   }
@@ -1946,8 +1956,8 @@ void ARMTargetInfo::relocateOne(uint8_t *Loc, uint32_t Type,
   }
 }
 
-uint64_t ARMTargetInfo::getImplicitAddend(const uint8_t *Buf,
-                                          uint32_t Type) const {
+int64_t ARMTargetInfo::getImplicitAddend(const uint8_t *Buf,
+                                         uint32_t Type) const {
   switch (Type) {
   default:
     return 0;
@@ -2268,8 +2278,8 @@ bool MipsTargetInfo<ELFT>::needsThunk(RelExpr Expr, uint32_t Type,
 }
 
 template <class ELFT>
-uint64_t MipsTargetInfo<ELFT>::getImplicitAddend(const uint8_t *Buf,
-                                                 uint32_t Type) const {
+int64_t MipsTargetInfo<ELFT>::getImplicitAddend(const uint8_t *Buf,
+                                                uint32_t Type) const {
   const endianness E = ELFT::TargetEndianness;
   switch (Type) {
   default:
@@ -2278,7 +2288,7 @@ uint64_t MipsTargetInfo<ELFT>::getImplicitAddend(const uint8_t *Buf,
   case R_MIPS_GPREL32:
   case R_MIPS_TLS_DTPREL32:
   case R_MIPS_TLS_TPREL32:
-    return read32<E>(Buf);
+    return SignExtend64<32>(read32<E>(Buf));
   case R_MIPS_26:
     // FIXME (simon): If the relocation target symbol is not a PLT entry
     // we should use another expression for calculation:
@@ -2361,9 +2371,19 @@ void MipsTargetInfo<ELFT>::relocateOne(uint8_t *Loc, uint32_t Type,
   case R_MIPS_26:
     write32<E>(Loc, (read32<E>(Loc) & ~0x3ffffff) | ((Val >> 2) & 0x3ffffff));
     break;
+  case R_MIPS_GOT16:
+    // The R_MIPS_GOT16 relocation's value in "relocatable" linking mode
+    // is updated addend (not a GOT index). In that case write high 16 bits
+    // to store a correct addend value.
+    if (Config->Relocatable)
+      writeMipsHi16<E>(Loc, Val);
+    else {
+      checkInt<16>(Loc, Val, Type);
+      writeMipsLo16<E>(Loc, Val);
+    }
+    break;
   case R_MIPS_GOT_DISP:
   case R_MIPS_GOT_PAGE:
-  case R_MIPS_GOT16:
   case R_MIPS_GPREL16:
   case R_MIPS_TLS_GD:
   case R_MIPS_TLS_LDM:

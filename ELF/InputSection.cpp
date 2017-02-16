@@ -76,12 +76,6 @@ InputSectionBase<ELFT>::InputSectionBase(elf::ObjectFile<ELFT> *File,
   if (V > UINT32_MAX)
     fatal(toString(File) + ": section sh_addralign is too large");
   Alignment = V;
-
-  // If it is not a mergeable section, overwrite the flag so that the flag
-  // is consistent with the class. This inconsistency could occur when
-  // string merging is disabled using -O0 flag.
-  if (!Config->Relocatable && !isa<MergeInputSection<ELFT>>(this))
-    this->Flags &= ~(SHF_MERGE | SHF_STRINGS);
 }
 
 template <class ELFT>
@@ -118,9 +112,19 @@ typename ELFT::uint InputSectionBase<ELFT>::getOffset(uintX_t Offset) const {
     // identify the start of the output .eh_frame.
     return Offset;
   case Merge:
-    return cast<MergeInputSection<ELFT>>(this)->getOffset(Offset);
+    const MergeInputSection<ELFT> *MS = cast<MergeInputSection<ELFT>>(this);
+    if (MS->MergeSec)
+      return MS->MergeSec->OutSecOff + MS->getOffset(Offset);
+    return MS->getOffset(Offset);
   }
   llvm_unreachable("invalid section kind");
+}
+
+template <class ELFT>
+OutputSectionBase *InputSectionBase<ELFT>::getOutputSection() const {
+  if (auto *MS = dyn_cast<MergeInputSection<ELFT>>(this))
+    return MS->MergeSec ? MS->MergeSec->OutSec : nullptr;
+  return OutSec;
 }
 
 // Uncompress section contents. Note that this function is called
@@ -210,9 +214,9 @@ InputSectionBase<ELFT> *InputSection<ELFT>::getRelocatedSection() {
   return Sections[this->Info];
 }
 
-// This is used for -r. We can't use memcpy to copy relocations because we need
-// to update symbol table offset and section index for each relocation. So we
-// copy relocations one by one.
+// This is used for -r and --emit-relocs. We can't use memcpy to copy
+// relocations because we need to update symbol table offset and section index
+// for each relocation. So we copy relocations one by one.
 template <class ELFT>
 template <class RelTy>
 void InputSection<ELFT>::copyRelocations(uint8_t *Buf, ArrayRef<RelTy> Rels) {
@@ -231,9 +235,41 @@ void InputSection<ELFT>::copyRelocations(uint8_t *Buf, ArrayRef<RelTy> Rels) {
 
     if (Config->Rela)
       P->r_addend = getAddend<ELFT>(Rel);
-    P->r_offset = RelocatedSection->getOffset(Rel.r_offset);
+
+    // Output section VA is zero for -r, so r_offset is an offset within the
+    // section, but for --emit-relocs it is an virtual address.
+    P->r_offset = RelocatedSection->OutSec->Addr +
+                  RelocatedSection->getOffset(Rel.r_offset);
     P->setSymbolAndType(In<ELFT>::SymTab->getSymbolIndex(&Body), Type,
                         Config->Mips64EL);
+
+    if (Body.Type == STT_SECTION) {
+      // We combine multiple section symbols into only one per
+      // section. This means we have to update the addend. That is
+      // trivial for Elf_Rela, but for Elf_Rel we have to write to the
+      // section data. We do that by adding to the Relocation vector.
+
+      // .eh_frame is horribly special and can reference discarded sections. To
+      // avoid having to parse and recreate .eh_frame, we just replace any
+      // relocation in it pointing to discarded sections with R_*_NONE, which
+      // hopefully creates a frame that is ignored at runtime.
+      InputSectionBase<ELFT> *Section =
+          cast<DefinedRegular<ELFT>>(Body).Section;
+      if (Section == &InputSection<ELFT>::Discarded) {
+        P->setSymbolAndType(0, 0, false);
+        continue;
+      }
+
+      if (Config->Rela) {
+        P->r_addend += Body.getVA<ELFT>() - Section->OutSec->Addr;
+      } else if (Config->Relocatable) {
+        const uint8_t *BufLoc = RelocatedSection->Data.begin() + Rel.r_offset;
+        RelocatedSection->Relocations.push_back(
+            {R_ABS, Type, Rel.r_offset, Target->getImplicitAddend(BufLoc, Type),
+             &Body});
+      }
+    }
+
   }
 }
 
@@ -273,7 +309,7 @@ static uint64_t getAArch64UndefinedRelativeWeakVA(uint64_t Type, uint64_t A,
 
 template <class ELFT>
 static typename ELFT::uint
-getRelocTargetVA(uint32_t Type, typename ELFT::uint A, typename ELFT::uint P,
+getRelocTargetVA(uint32_t Type, int64_t A, typename ELFT::uint P,
                  const SymbolBody &Body, RelExpr Expr) {
   switch (Expr) {
   case R_HINT:
@@ -423,7 +459,7 @@ void InputSection<ELFT>::relocateNonAlloc(uint8_t *Buf, ArrayRef<RelTy> Rels) {
     uint32_t Type = Rel.getType(Config->Mips64EL);
     uintX_t Offset = this->getOffset(Rel.r_offset);
     uint8_t *BufLoc = Buf + Offset;
-    uintX_t Addend = getAddend<ELFT>(Rel);
+    int64_t Addend = getAddend<ELFT>(Rel);
     if (!RelTy::IsRela)
       Addend += Target->getImplicitAddend(BufLoc, Type);
 
@@ -461,12 +497,11 @@ void InputSectionBase<ELFT>::relocate(uint8_t *Buf, uint8_t *BufEnd) {
     uintX_t Offset = getOffset(Rel.Offset);
     uint8_t *BufLoc = Buf + Offset;
     uint32_t Type = Rel.Type;
-    uintX_t A = Rel.Addend;
 
     uintX_t AddrLoc = OutSec->Addr + Offset;
     RelExpr Expr = Rel.Expr;
     uint64_t TargetVA = SignExtend64<Bits>(
-        getRelocTargetVA<ELFT>(Type, A, AddrLoc, *Rel.Sym, Expr));
+        getRelocTargetVA<ELFT>(Type, Rel.Addend, AddrLoc, *Rel.Sym, Expr));
 
     switch (Expr) {
     case R_RELAX_GOT_PC:
@@ -510,7 +545,8 @@ template <class ELFT> void InputSection<ELFT>::writeTo(uint8_t *Buf) {
     return;
   }
 
-  // If -r is given, then an InputSection may be a relocation section.
+  // If -r or --emit-relocs is given, then an InputSection
+  // may be a relocation section.
   if (this->Type == SHT_RELA) {
     copyRelocations(Buf + OutSecOff, this->template getDataAs<Elf_Rela>());
     return;

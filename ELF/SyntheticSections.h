@@ -39,7 +39,7 @@ template <class ELFT> class SyntheticSection : public InputSection<ELFT> {
 public:
   SyntheticSection(uintX_t Flags, uint32_t Type, uintX_t Addralign,
                    StringRef Name)
-      : InputSection<ELFT>(Flags, Type, Addralign, ArrayRef<uint8_t>(), Name,
+      : InputSection<ELFT>(Flags, Type, Addralign, {}, Name,
                            InputSectionData::Synthetic) {
     this->Live = true;
   }
@@ -107,6 +107,19 @@ private:
   uint8_t *HashBuf;
 };
 
+// For each copy relocation, we create an instance of this class to
+// reserve space in .bss or .bss.rel.ro.
+template <class ELFT>
+class CopyRelSection final : public SyntheticSection<ELFT> {
+  typedef typename ELFT::uint uintX_t;
+
+public:
+  CopyRelSection(bool ReadOnly, uintX_t AddrAlign, size_t Size);
+  void writeTo(uint8_t *) override {}
+  size_t getSize() const override { return Size; }
+  size_t Size;
+};
+
 template <class ELFT>
 class MipsGotSection final : public SyntheticSection<ELFT> {
   typedef typename ELFT::uint uintX_t;
@@ -117,11 +130,11 @@ public:
   size_t getSize() const override { return Size; }
   void finalize() override;
   bool empty() const override;
-  void addEntry(SymbolBody &Sym, uintX_t Addend, RelExpr Expr);
+  void addEntry(SymbolBody &Sym, int64_t Addend, RelExpr Expr);
   bool addDynTlsEntry(SymbolBody &Sym);
   bool addTlsIndex();
-  uintX_t getPageEntryOffset(const SymbolBody &B, uintX_t Addend) const;
-  uintX_t getBodyEntryOffset(const SymbolBody &B, uintX_t Addend) const;
+  uintX_t getPageEntryOffset(const SymbolBody &B, int64_t Addend) const;
+  uintX_t getBodyEntryOffset(const SymbolBody &B, int64_t Addend) const;
   uintX_t getGlobalDynOffset(const SymbolBody &B) const;
 
   // Returns the symbol which corresponds to the first entry of the global part
@@ -222,7 +235,7 @@ private:
   std::vector<const SymbolBody *> Entries;
 };
 
-// The IgotPltSection is a Got associated with the IpltSection for GNU Ifunc
+// The IgotPltSection is a Got associated with the PltSection for GNU Ifunc
 // Symbols that will be relocated by Target->IRelativeRel.
 // On most Targets the IgotPltSection will immediately follow the GotPltSection
 // on ARM the IgotPltSection will immediately follow the GotSection.
@@ -254,8 +267,7 @@ public:
 private:
   const bool Dynamic;
 
-  // ELF string tables start with a NUL byte, so 1.
-  uintX_t Size = 1;
+  uintX_t Size = 0;
 
   llvm::DenseMap<StringRef, unsigned> StringMap;
   std::vector<StringRef> Strings;
@@ -267,20 +279,13 @@ template <class ELFT> class DynamicReloc {
 public:
   DynamicReloc(uint32_t Type, const InputSectionBase<ELFT> *InputSec,
                uintX_t OffsetInSec, bool UseSymVA, SymbolBody *Sym,
-               uintX_t Addend)
+               int64_t Addend)
       : Type(Type), Sym(Sym), InputSec(InputSec), OffsetInSec(OffsetInSec),
         UseSymVA(UseSymVA), Addend(Addend) {}
 
-  DynamicReloc(uint32_t Type, const OutputSectionBase *OutputSec,
-               uintX_t OffsetInSec, bool UseSymVA, SymbolBody *Sym,
-               uintX_t Addend)
-      : Type(Type), Sym(Sym), OutputSec(OutputSec), OffsetInSec(OffsetInSec),
-        UseSymVA(UseSymVA), Addend(Addend) {}
-
   uintX_t getOffset() const;
-  uintX_t getAddend() const;
+  int64_t getAddend() const;
   uint32_t getSymIndex() const;
-  const OutputSectionBase *getOutputSec() const { return OutputSec; }
   const InputSectionBase<ELFT> *getInputSec() const { return InputSec; }
 
   uint32_t Type;
@@ -288,10 +293,9 @@ public:
 private:
   SymbolBody *Sym;
   const InputSectionBase<ELFT> *InputSec = nullptr;
-  const OutputSectionBase *OutputSec = nullptr;
   uintX_t OffsetInSec;
   bool UseSymVA;
-  uintX_t Addend;
+  int64_t Addend;
 };
 
 template <class ELFT>
@@ -457,9 +461,13 @@ private:
   size_t Size = 0;
 };
 
-template <class ELFT> class PltSection final : public SyntheticSection<ELFT> {
+// The PltSection is used for both the Plt and Iplt. The former always has a
+// header as its first entry that is used at run-time to resolve lazy binding.
+// The latter is used for GNU Ifunc symbols, that will be subject to a
+// Target->IRelativeRel.
+template <class ELFT> class PltSection : public SyntheticSection<ELFT> {
 public:
-  PltSection();
+  PltSection(size_t HeaderSize);
   void writeTo(uint8_t *Buf) override;
   size_t getSize() const override;
   void addEntry(SymbolBody &Sym);
@@ -467,23 +475,12 @@ public:
   void addSymbols();
 
 private:
+  void writeHeader(uint8_t *Buf){};
+  void addHeaderSymbols(){};
+  unsigned getPltRelocOff() const;
   std::vector<std::pair<const SymbolBody *, unsigned>> Entries;
-};
-
-// The IpltSection is a variant of Plt for recording entries for GNU Ifunc
-// symbols that will be subject to a Target->IRelativeRel
-// The IpltSection immediately follows the Plt section in the Output Section
-template <class ELFT> class IpltSection final : public SyntheticSection<ELFT> {
-public:
-  IpltSection();
-  void writeTo(uint8_t *Buf) override;
-  size_t getSize() const override;
-  void addEntry(SymbolBody &Sym);
-  bool empty() const override { return Entries.empty(); }
-  void addSymbols();
-
-private:
-  std::vector<std::pair<const SymbolBody *, unsigned>> Entries;
+  // Iplt always has HeaderSize of 0, the Plt HeaderSize is always non-zero
+  size_t HeaderSize;
 };
 
 template <class ELFT>
@@ -629,6 +626,32 @@ public:
   bool empty() const override;
 };
 
+// MergeSyntheticSection is a class that allows us to put mergeable sections
+// with different attributes in a single output sections. To do that
+// we put them into MergeSyntheticSection synthetic input sections which are
+// attached to regular output sections.
+template <class ELFT>
+class MergeSyntheticSection final : public SyntheticSection<ELFT> {
+  typedef typename ELFT::uint uintX_t;
+
+public:
+  MergeSyntheticSection(StringRef Name, uint32_t Type, uintX_t Flags,
+                        uintX_t Alignment);
+  void addSection(MergeInputSection<ELFT> *MS);
+  void writeTo(uint8_t *Buf) override;
+  void finalize() override;
+  bool shouldTailMerge() const;
+  size_t getSize() const override;
+
+private:
+  void finalizeTailMerge();
+  void finalizeNoTailMerge();
+
+  bool Finalized = false;
+  llvm::StringTableBuilder Builder;
+  std::vector<MergeInputSection<ELFT> *> Sections;
+};
+
 // .MIPS.abiflags section.
 template <class ELFT>
 class MipsAbiFlagsSection final : public SyntheticSection<ELFT> {
@@ -747,7 +770,7 @@ template <class ELFT> struct In {
   static InputSection<ELFT> *Interp;
   static MipsRldMapSection<ELFT> *MipsRldMap;
   static PltSection<ELFT> *Plt;
-  static IpltSection<ELFT> *Iplt;
+  static PltSection<ELFT> *Iplt;
   static RelocationSection<ELFT> *RelaDyn;
   static RelocationSection<ELFT> *RelaPlt;
   static RelocationSection<ELFT> *RelaIplt;
@@ -776,7 +799,7 @@ template <class ELFT> HashTableSection<ELFT> *In<ELFT>::HashTab;
 template <class ELFT> InputSection<ELFT> *In<ELFT>::Interp;
 template <class ELFT> MipsRldMapSection<ELFT> *In<ELFT>::MipsRldMap;
 template <class ELFT> PltSection<ELFT> *In<ELFT>::Plt;
-template <class ELFT> IpltSection<ELFT> *In<ELFT>::Iplt;
+template <class ELFT> PltSection<ELFT> *In<ELFT>::Iplt;
 template <class ELFT> RelocationSection<ELFT> *In<ELFT>::RelaDyn;
 template <class ELFT> RelocationSection<ELFT> *In<ELFT>::RelaPlt;
 template <class ELFT> RelocationSection<ELFT> *In<ELFT>::RelaIplt;

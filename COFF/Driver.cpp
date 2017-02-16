@@ -406,7 +406,8 @@ static unsigned parseDebugType(StringRef Arg) {
     DebugTypes |= StringSwitch<unsigned>(Type.lower())
                       .Case("cv", static_cast<unsigned>(DebugType::CV))
                       .Case("pdata", static_cast<unsigned>(DebugType::PData))
-                      .Case("fixup", static_cast<unsigned>(DebugType::Fixup));
+                      .Case("fixup", static_cast<unsigned>(DebugType::Fixup))
+                      .Default(0);
   return DebugTypes;
 }
 
@@ -609,10 +610,21 @@ void LinkerDriver::link(ArrayRef<const char *> ArgsArr) {
           fatal("/opt:lldltojobs: invalid job count: " + Jobs);
         continue;
       }
+      if (StringRef(S).startswith("lldltopartitions=")) {
+        StringRef N = StringRef(S).substr(17);
+        if (N.getAsInteger(10, Config->LTOPartitions) ||
+            Config->LTOPartitions == 0)
+          fatal("/opt:lldltopartitions: invalid partition count: " + N);
+        continue;
+      }
       if (S != "ref" && S != "lbr" && S != "nolbr")
         fatal("/opt: unknown option: " + S);
     }
   }
+
+  // Handle /lldsavetemps
+  if (Args.hasArg(OPT_lldsavetemps))
+    Config->SaveTemps = true;
 
   // Handle /failifmismatch
   for (auto *Arg : Args.filtered(OPT_failifmismatch))
@@ -806,6 +818,14 @@ void LinkerDriver::link(ArrayRef<const char *> ArgsArr) {
     if (Symtab.findUnderscore("_load_config_used"))
       addUndefined(mangle("_load_config_used"));
   } while (run());
+
+  // If /msvclto is given, we use the MSVC linker to link LTO output files.
+  // This is useful because MSVC link.exe can generate complete PDBs.
+  if (Args.hasArg(OPT_msvclto)) {
+    std::vector<StringRef> ObjectFiles = Symtab.compileBitcodeFiles();
+    runMSVCLinker(Args, ObjectFiles);
+    exit(0);
+  }
 
   // Do LTO by compiling bitcode input files to a set of native COFF files then
   // link those files.

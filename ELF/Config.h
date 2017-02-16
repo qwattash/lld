@@ -88,6 +88,7 @@ struct Configuration {
   llvm::StringRef LTONewPmPasses;
   llvm::StringRef MapFile;
   llvm::StringRef OutputFile;
+  llvm::StringRef OptRemarksFilename;
   llvm::StringRef SoName;
   llvm::StringRef Sysroot;
   std::string RPath;
@@ -108,6 +109,7 @@ struct Configuration {
   bool Demangle = true;
   bool DisableVerify;
   bool EhFrameHdr;
+  bool EmitRelocs;
   bool EnableNewDtags;
   bool ExportDynamic;
   bool FatalWarnings;
@@ -123,7 +125,7 @@ struct Configuration {
   bool Nostdlib;
   bool OFormatBinary;
   bool OMagic;
-  bool Pic;
+  bool OptRemarksWithHotness;
   bool Pie;
   bool PrintGcSections;
   bool Rela;
@@ -169,6 +171,14 @@ struct Configuration {
   bool isMIPS() const {
     return EMachine == llvm::ELF::EM_MIPS || EMachine == llvm::ELF::EM_MIPS_CHERI;
   }
+
+  // Returns true if we need to pass through relocations in input
+  // files to the output file. Usually false because we consume
+  // relocations.
+  bool copyRelocs() const { return Relocatable || EmitRelocs; }
+
+  // Returns true if we are creating position-independent code.
+  bool pic() const { return Pie || Shared; }
 };
 
 // The only instance of Configuration struct.

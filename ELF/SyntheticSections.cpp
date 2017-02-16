@@ -368,6 +368,15 @@ void BuildIdSection<ELFT>::computeHash(
 }
 
 template <class ELFT>
+CopyRelSection<ELFT>::CopyRelSection(bool ReadOnly, uintX_t AddrAlign, size_t S)
+    : SyntheticSection<ELFT>(SHF_ALLOC, SHT_NOBITS, AddrAlign,
+                             ReadOnly ? ".bss.rel.ro" : ".bss"),
+      Size(S) {
+  if (!ReadOnly)
+    this->Flags |= SHF_WRITE;
+}
+
+template <class ELFT>
 void BuildIdSection<ELFT>::writeBuildId(ArrayRef<uint8_t> Buf) {
   switch (Config->BuildId) {
   case BuildIdKind::Fast:
@@ -458,7 +467,7 @@ MipsGotSection<ELFT>::MipsGotSection()
                              SHT_PROGBITS, 16, ".got") {}
 
 template <class ELFT>
-void MipsGotSection<ELFT>::addEntry(SymbolBody &Sym, uintX_t Addend,
+void MipsGotSection<ELFT>::addEntry(SymbolBody &Sym, int64_t Addend,
                                     RelExpr Expr) {
   // For "true" local symbols which can be referenced from the same module
   // only compiler creates two instructions for address loading:
@@ -490,7 +499,8 @@ void MipsGotSection<ELFT>::addEntry(SymbolBody &Sym, uintX_t Addend,
     // sections referenced by GOT relocations. Then later in the `finalize`
     // method calculate number of "pages" required to cover all saved output
     // section and allocate appropriate number of GOT entries.
-    PageIndexMap.insert({cast<DefinedRegular<ELFT>>(&Sym)->Section->OutSec, 0});
+    auto *DefSym = cast<DefinedRegular<ELFT>>(&Sym);
+    PageIndexMap.insert({DefSym->Section->getOutputSection(), 0});
     return;
   }
   if (Sym.isTls()) {
@@ -559,9 +569,9 @@ static uint64_t getMipsPageCount(uint64_t Size) {
 template <class ELFT>
 typename MipsGotSection<ELFT>::uintX_t
 MipsGotSection<ELFT>::getPageEntryOffset(const SymbolBody &B,
-                                         uintX_t Addend) const {
+                                         int64_t Addend) const {
   const OutputSectionBase *OutSec =
-      cast<DefinedRegular<ELFT>>(&B)->Section->OutSec;
+      cast<DefinedRegular<ELFT>>(&B)->Section->getOutputSection();
   uintX_t SecAddr = getMipsPageAddr(OutSec->Addr);
   uintX_t SymAddr = getMipsPageAddr(B.getVA<ELFT>(Addend));
   uintX_t Index = PageIndexMap.lookup(OutSec) + (SymAddr - SecAddr) / 0xffff;
@@ -572,7 +582,7 @@ MipsGotSection<ELFT>::getPageEntryOffset(const SymbolBody &B,
 template <class ELFT>
 typename MipsGotSection<ELFT>::uintX_t
 MipsGotSection<ELFT>::getBodyEntryOffset(const SymbolBody &B,
-                                         uintX_t Addend) const {
+                                         int64_t Addend) const {
   // Calculate offset of the GOT entries block: TLS, global, local.
   uintX_t Index = HeaderEntriesNum + PageEntriesNum;
   if (B.isTls())
@@ -691,7 +701,7 @@ template <class ELFT> void MipsGotSection<ELFT>::writeTo(uint8_t *Buf) {
   // TLS symbol's values otherwise. To calculate the adjustments use offsets
   // for thread-local storage.
   // https://www.linux-mips.org/wiki/NPTL
-  if (TlsIndexOff != -1U && !Config->Pic)
+  if (TlsIndexOff != -1U && !Config->pic())
     writeUint<ELFT>(Buf + TlsIndexOff, 1);
   for (const SymbolBody *B : TlsEntries) {
     if (!B || B->isPreemptible())
@@ -764,7 +774,10 @@ template <class ELFT>
 StringTableSection<ELFT>::StringTableSection(StringRef Name, bool Dynamic)
     : SyntheticSection<ELFT>(Dynamic ? (uintX_t)SHF_ALLOC : 0, SHT_STRTAB, 1,
                              Name),
-      Dynamic(Dynamic) {}
+      Dynamic(Dynamic) {
+  // ELF string tables start with a NUL byte.
+  addString("");
+}
 
 // Adds a string to the string table. If HashIt is true we hash and check for
 // duplicates. It is optional because the name of global symbols are already
@@ -784,8 +797,6 @@ unsigned StringTableSection<ELFT>::addString(StringRef S, bool HashIt) {
 }
 
 template <class ELFT> void StringTableSection<ELFT>::writeTo(uint8_t *Buf) {
-  // ELF string tables start with NUL byte, so advance the pointer by one.
-  ++Buf;
   for (StringRef S : Strings) {
     memcpy(Buf, S.data(), S.size());
     Buf += S.size() + 1;
@@ -974,13 +985,10 @@ template <class ELFT> void DynamicSection<ELFT>::writeTo(uint8_t *Buf) {
 
 template <class ELFT>
 typename ELFT::uint DynamicReloc<ELFT>::getOffset() const {
-  if (OutputSec)
-    return OutputSec->Addr + OffsetInSec;
   return InputSec->OutSec->Addr + InputSec->getOffset(OffsetInSec);
 }
 
-template <class ELFT>
-typename ELFT::uint DynamicReloc<ELFT>::getAddend() const {
+template <class ELFT> int64_t DynamicReloc<ELFT>::getAddend() const {
   if (UseSymVA)
     return Sym->getVA<ELFT>(Addend);
   return Addend;
@@ -1129,8 +1137,16 @@ template <class ELFT> void SymbolTableSection<ELFT>::addLocal(SymbolBody *B) {
 
 template <class ELFT>
 size_t SymbolTableSection<ELFT>::getSymbolIndex(SymbolBody *Body) {
-  auto I = llvm::find_if(
-      Symbols, [&](const SymbolTableEntry &E) { return E.Symbol == Body; });
+  auto I = llvm::find_if(Symbols, [&](const SymbolTableEntry &E) {
+    if (E.Symbol == Body)
+      return true;
+    // This is used for -r, so we have to handle multiple section
+    // symbols being combined.
+    if (Body->Type == STT_SECTION && E.Symbol->Type == STT_SECTION)
+      return cast<DefinedRegular<ELFT>>(Body)->Section->OutSec ==
+             cast<DefinedRegular<ELFT>>(E.Symbol)->Section->OutSec;
+    return false;
+  });
   if (I == Symbols.end())
     return 0;
   return I - Symbols.begin() + 1;
@@ -1161,7 +1177,7 @@ void SymbolTableSection<ELFT>::writeLocalSymbols(uint8_t *&Buf) {
       ESym->st_shndx = SHN_ABS;
       ESym->st_value = Body.Value;
     } else {
-      const OutputSectionBase *OutSec = Section->OutSec;
+      const OutputSectionBase *OutSec = Section->getOutputSection();
       ESym->st_shndx = OutSec->SectionIndex;
       ESym->st_value = OutSec->Addr + Section->getOffset(Body);
     }
@@ -1206,7 +1222,7 @@ void SymbolTableSection<ELFT>::writeGlobalSymbols(uint8_t *Buf) {
       // pointer equality by STO_MIPS_PLT flag. That is necessary to help
       // dynamic linker distinguish such symbols and MIPS lazy-binding stubs.
       // https://sourceware.org/ml/binutils/2008-07/txt00000.txt
-      if (Body->isInPlt() && Body->NeedsCopyOrPltAddr)
+      if (Body->isInPlt() && Body->NeedsPltAddr)
         ESym->st_other |= STO_MIPS_PLT;
       if (Config->Relocatable) {
         auto *D = dyn_cast<DefinedRegular<ELFT>>(Body);
@@ -1227,7 +1243,7 @@ SymbolTableSection<ELFT>::getOutputSection(SymbolBody *Sym) {
   case SymbolBody::DefinedRegularKind: {
     auto &D = cast<DefinedRegular<ELFT>>(*Sym);
     if (D.Section)
-      return D.Section->OutSec;
+      return D.Section->getOutputSection();
     break;
   }
   case SymbolBody::DefinedCommonKind:
@@ -1236,8 +1252,8 @@ SymbolTableSection<ELFT>::getOutputSection(SymbolBody *Sym) {
     return In<ELFT>::Common->OutSec;
   case SymbolBody::SharedKind: {
     auto &SS = cast<SharedSymbol<ELFT>>(*Sym);
-    if (SS.needsCopy())
-      return SS.getBssSectionForCopy();
+    if (SS.NeedsCopy)
+      return SS.Section->OutSec;
     break;
   }
   case SymbolBody::UndefinedKind:
@@ -1436,19 +1452,23 @@ template <class ELFT> void HashTableSection<ELFT>::writeTo(uint8_t *Buf) {
 }
 
 template <class ELFT>
-PltSection<ELFT>::PltSection()
+PltSection<ELFT>::PltSection(size_t S)
     : SyntheticSection<ELFT>(SHF_ALLOC | SHF_EXECINSTR, SHT_PROGBITS, 16,
-                             ".plt") {}
+                             ".plt"),
+      HeaderSize(S) {}
 
 template <class ELFT> void PltSection<ELFT>::writeTo(uint8_t *Buf) {
-  // At beginning of PLT, we have code to call the dynamic linker
-  // to resolve dynsyms at runtime. Write such code.
-  Target->writePltHeader(Buf);
-  size_t Off = Target->PltHeaderSize;
+  // At beginning of PLT but not the IPLT, we have code to call the dynamic
+  // linker to resolve dynsyms at runtime. Write such code.
+  if (HeaderSize != 0)
+    Target->writePltHeader(Buf);
+  size_t Off = HeaderSize;
+  // The IPlt is immediately after the Plt, account for this in RelOff
+  unsigned PltOff = getPltRelocOff();
 
   for (auto &I : Entries) {
     const SymbolBody *B = I.first;
-    unsigned RelOff = I.second;
+    unsigned RelOff = I.second + PltOff;
     uint64_t Got = B->getGotPltVA<ELFT>();
     uint64_t Plt = this->getVA() + Off;
     Target->writePlt(Buf + Off, Got, Plt, B->PltIndex, RelOff);
@@ -1458,61 +1478,34 @@ template <class ELFT> void PltSection<ELFT>::writeTo(uint8_t *Buf) {
 
 template <class ELFT> void PltSection<ELFT>::addEntry(SymbolBody &Sym) {
   Sym.PltIndex = Entries.size();
-  unsigned RelOff = In<ELFT>::RelaPlt->getRelocOffset();
+  RelocationSection<ELFT> *PltRelocSection = In<ELFT>::RelaPlt;
+  if (HeaderSize == 0) {
+    PltRelocSection = In<ELFT>::RelaIplt;
+    Sym.IsInIplt = true;
+  }
+  unsigned RelOff = PltRelocSection->getRelocOffset();
   Entries.push_back(std::make_pair(&Sym, RelOff));
 }
 
 template <class ELFT> size_t PltSection<ELFT>::getSize() const {
-  return Target->PltHeaderSize + Entries.size() * Target->PltEntrySize;
+  return HeaderSize + Entries.size() * Target->PltEntrySize;
 }
 
 // Some architectures such as additional symbols in the PLT section. For
 // example ARM uses mapping symbols to aid disassembly
 template <class ELFT> void PltSection<ELFT>::addSymbols() {
-  Target->addPltHeaderSymbols(this);
-  size_t Off = Target->PltHeaderSize;
+  // The PLT may have symbols defined for the Header, the IPLT has no header
+  if (HeaderSize != 0)
+    Target->addPltHeaderSymbols(this);
+  size_t Off = HeaderSize;
   for (size_t I = 0; I < Entries.size(); ++I) {
     Target->addPltSymbols(this, Off);
     Off += Target->PltEntrySize;
   }
 }
 
-template <class ELFT>
-IpltSection<ELFT>::IpltSection()
-    : SyntheticSection<ELFT>(SHF_ALLOC | SHF_EXECINSTR, SHT_PROGBITS, 16,
-                             ".plt") {}
-
-template <class ELFT> void IpltSection<ELFT>::writeTo(uint8_t *Buf) {
-  // The IRelative relocations do not support lazy binding so no header is
-  // needed
-  size_t Off = 0;
-  for (auto &I : Entries) {
-    const SymbolBody *B = I.first;
-    unsigned RelOff = I.second + In<ELFT>::Plt->getSize();
-    uint64_t Got = B->getGotPltVA<ELFT>();
-    uint64_t Plt = this->getVA() + Off;
-    Target->writePlt(Buf + Off, Got, Plt, B->PltIndex, RelOff);
-    Off += Target->PltEntrySize;
-  }
-}
-
-template <class ELFT> void IpltSection<ELFT>::addEntry(SymbolBody &Sym) {
-  Sym.PltIndex = Entries.size();
-  Sym.IsInIplt = true;
-  unsigned RelOff = In<ELFT>::RelaIplt->getRelocOffset();
-  Entries.push_back(std::make_pair(&Sym, RelOff));
-}
-
-template <class ELFT> size_t IpltSection<ELFT>::getSize() const {
-  return Entries.size() * Target->PltEntrySize;
-}
-
-template <class ELFT> void IpltSection<ELFT>::addSymbols() {
-  size_t Off = 0;
-  for (size_t I = 0; I < Entries.size(); ++I) {
-    Target->addPltSymbols(this, Off);
-    Off += Target->PltEntrySize;
-  }
+template <class ELFT> unsigned PltSection<ELFT>::getPltRelocOff() const {
+  return (HeaderSize == 0) ? In<ELFT>::Plt->getSize() : 0;
 }
 
 template <class ELFT>
@@ -1881,6 +1874,78 @@ template <class ELFT> bool VersionNeedSection<ELFT>::empty() const {
 }
 
 template <class ELFT>
+MergeSyntheticSection<ELFT>::MergeSyntheticSection(StringRef Name,
+                                                   uint32_t Type, uintX_t Flags,
+                                                   uintX_t Alignment)
+    : SyntheticSection<ELFT>(Flags, Type, Alignment, Name),
+      Builder(StringTableBuilder::RAW, Alignment) {}
+
+template <class ELFT>
+void MergeSyntheticSection<ELFT>::addSection(MergeInputSection<ELFT> *MS) {
+  assert(!Finalized);
+  MS->MergeSec = this;
+  Sections.push_back(MS);
+}
+
+template <class ELFT> void MergeSyntheticSection<ELFT>::writeTo(uint8_t *Buf) {
+  Builder.write(Buf);
+}
+
+template <class ELFT>
+bool MergeSyntheticSection<ELFT>::shouldTailMerge() const {
+  return (this->Flags & SHF_STRINGS) && Config->Optimize >= 2;
+}
+
+template <class ELFT> void MergeSyntheticSection<ELFT>::finalizeTailMerge() {
+  // Add all string pieces to the string table builder to create section
+  // contents.
+  for (MergeInputSection<ELFT> *Sec : Sections)
+    for (size_t I = 0, E = Sec->Pieces.size(); I != E; ++I)
+      if (Sec->Pieces[I].Live)
+        Builder.add(Sec->getData(I));
+
+  // Fix the string table content. After this, the contents will never change.
+  Builder.finalize();
+
+  // finalize() fixed tail-optimized strings, so we can now get
+  // offsets of strings. Get an offset for each string and save it
+  // to a corresponding StringPiece for easy access.
+  for (MergeInputSection<ELFT> *Sec : Sections)
+    for (size_t I = 0, E = Sec->Pieces.size(); I != E; ++I)
+      if (Sec->Pieces[I].Live)
+        Sec->Pieces[I].OutputOff = Builder.getOffset(Sec->getData(I));
+}
+
+template <class ELFT> void MergeSyntheticSection<ELFT>::finalizeNoTailMerge() {
+  // Add all string pieces to the string table builder to create section
+  // contents. Because we are not tail-optimizing, offsets of strings are
+  // fixed when they are added to the builder (string table builder contains
+  // a hash table from strings to offsets).
+  for (MergeInputSection<ELFT> *Sec : Sections)
+    for (size_t I = 0, E = Sec->Pieces.size(); I != E; ++I)
+      if (Sec->Pieces[I].Live)
+        Sec->Pieces[I].OutputOff = Builder.add(Sec->getData(I));
+
+  Builder.finalizeInOrder();
+}
+
+template <class ELFT> void MergeSyntheticSection<ELFT>::finalize() {
+  if (Finalized)
+    return;
+  Finalized = true;
+  if (shouldTailMerge())
+    finalizeTailMerge();
+  else
+    finalizeNoTailMerge();
+}
+
+template <class ELFT> size_t MergeSyntheticSection<ELFT>::getSize() const {
+  // We should finalize string builder to know the size.
+  const_cast<MergeSyntheticSection<ELFT> *>(this)->finalize();
+  return Builder.getSize();
+}
+
+template <class ELFT>
 MipsRldMapSection<ELFT>::MipsRldMapSection()
     : SyntheticSection<ELFT>(SHF_ALLOC | SHF_WRITE, SHT_PROGBITS,
                              sizeof(typename ELFT::uint), ".rld_map") {}
@@ -1988,6 +2053,11 @@ template class elf::BuildIdSection<ELF32BE>;
 template class elf::BuildIdSection<ELF64LE>;
 template class elf::BuildIdSection<ELF64BE>;
 
+template class elf::CopyRelSection<ELF32LE>;
+template class elf::CopyRelSection<ELF32BE>;
+template class elf::CopyRelSection<ELF64LE>;
+template class elf::CopyRelSection<ELF64BE>;
+
 template class elf::GotSection<ELF32LE>;
 template class elf::GotSection<ELF32BE>;
 template class elf::GotSection<ELF64LE>;
@@ -2043,11 +2113,6 @@ template class elf::PltSection<ELF32BE>;
 template class elf::PltSection<ELF64LE>;
 template class elf::PltSection<ELF64BE>;
 
-template class elf::IpltSection<ELF32LE>;
-template class elf::IpltSection<ELF32BE>;
-template class elf::IpltSection<ELF64LE>;
-template class elf::IpltSection<ELF64BE>;
-
 template class elf::GdbIndexSection<ELF32LE>;
 template class elf::GdbIndexSection<ELF32BE>;
 template class elf::GdbIndexSection<ELF64LE>;
@@ -2072,6 +2137,11 @@ template class elf::VersionDefinitionSection<ELF32LE>;
 template class elf::VersionDefinitionSection<ELF32BE>;
 template class elf::VersionDefinitionSection<ELF64LE>;
 template class elf::VersionDefinitionSection<ELF64BE>;
+
+template class elf::MergeSyntheticSection<ELF32LE>;
+template class elf::MergeSyntheticSection<ELF32BE>;
+template class elf::MergeSyntheticSection<ELF64LE>;
+template class elf::MergeSyntheticSection<ELF64BE>;
 
 template class elf::MipsRldMapSection<ELF32LE>;
 template class elf::MipsRldMapSection<ELF32BE>;

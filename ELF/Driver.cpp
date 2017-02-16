@@ -523,6 +523,7 @@ void LinkerDriver::readConfigs(opt::InputArgList &Args) {
   Config->BsymbolicFunctions = Args.hasArg(OPT_Bsymbolic_functions);
   Config->Demangle = getArg(Args, OPT_demangle, OPT_no_demangle, true);
   Config->DisableVerify = Args.hasArg(OPT_disable_verify);
+  Config->EmitRelocs = Args.hasArg(OPT_emit_relocs);
   Config->EhFrameHdr = Args.hasArg(OPT_eh_frame_hdr);
   Config->EnableNewDtags = !Args.hasArg(OPT_disable_new_dtags);
   Config->ExportDynamic =
@@ -536,6 +537,7 @@ void LinkerDriver::readConfigs(opt::InputArgList &Args) {
   Config->NoUndefinedVersion = Args.hasArg(OPT_no_undefined_version);
   Config->Nostdlib = Args.hasArg(OPT_nostdlib);
   Config->OMagic = Args.hasArg(OPT_omagic);
+  Config->OptRemarksWithHotness = Args.hasArg(OPT_opt_remarks_with_hotness);
   Config->Pie = getArg(Args, OPT_pie, OPT_nopie, false);
   Config->PrintGcSections = Args.hasArg(OPT_print_gc_sections);
   Config->Relocatable = Args.hasArg(OPT_relocatable);
@@ -558,6 +560,7 @@ void LinkerDriver::readConfigs(opt::InputArgList &Args) {
   Config->LTOAAPipeline = getString(Args, OPT_lto_aa_pipeline);
   Config->LTONewPmPasses = getString(Args, OPT_lto_newpm_passes);
   Config->MapFile = getString(Args, OPT_Map);
+  Config->OptRemarksFilename = getString(Args, OPT_opt_remarks_filename);
   Config->OutputFile = getString(Args, OPT_o);
   Config->SoName = getString(Args, OPT_soname);
   Config->Sysroot = getString(Args, OPT_sysroot);
@@ -579,7 +582,7 @@ void LinkerDriver::readConfigs(opt::InputArgList &Args) {
   Config->ZNow = hasZOption(Args, "now");
   Config->ZOrigin = hasZOption(Args, "origin");
   Config->ZRelro = !hasZOption(Args, "norelro");
-  Config->ZStackSize = getZOptionValue(Args, "stack-size", -1);
+  Config->ZStackSize = getZOptionValue(Args, "stack-size", 0);
   Config->ZWxneeded = hasZOption(Args, "wxneeded");
 
   Config->OFormatBinary = isOutputFormatBinary(Args);
@@ -600,9 +603,6 @@ void LinkerDriver::readConfigs(opt::InputArgList &Args) {
 
   if (!Config->Relocatable)
     Config->Strip = getStripOption(Args);
-
-  // Config->Pic is true if we are generating position-independent code.
-  Config->Pic = Config->Pie || Config->Shared;
 
   if (auto *Arg = Args.getLastArg(OPT_hash_style)) {
     StringRef S = Arg->getValue();
@@ -644,7 +644,7 @@ void LinkerDriver::readConfigs(opt::InputArgList &Args) {
   for (auto *Arg : Args.filtered(OPT_undefined))
     Config->Undefined.push_back(Arg->getValue());
 
-  if (auto *Arg = Args.getLastArg(OPT_dynamic_list))
+  for (auto *Arg : Args.filtered(OPT_dynamic_list))
     if (Optional<MemoryBufferRef> Buffer = readFile(Arg->getValue()))
       readDynamicList(*Buffer);
 
@@ -776,7 +776,7 @@ static uint64_t getImageBase(opt::InputArgList &Args) {
   // has to be called after the variable is initialized.
   auto *Arg = Args.getLastArg(OPT_image_base);
   if (!Arg)
-    return Config->Pic ? 0 : Target->DefaultImageBase;
+    return Config->pic() ? 0 : Target->DefaultImageBase;
 
   StringRef S = Arg->getValue();
   uint64_t V;

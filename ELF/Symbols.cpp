@@ -29,8 +29,7 @@ using namespace lld;
 using namespace lld::elf;
 
 template <class ELFT>
-static typename ELFT::uint getSymVA(const SymbolBody &Body,
-                                    typename ELFT::uint &Addend) {
+static typename ELFT::uint getSymVA(const SymbolBody &Body, int64_t &Addend) {
   typedef typename ELFT::uint uintX_t;
 
   switch (Body.kind()) {
@@ -63,7 +62,8 @@ static typename ELFT::uint getSymVA(const SymbolBody &Body,
       Offset += Addend;
       Addend = 0;
     }
-    uintX_t VA = (IS->OutSec ? IS->OutSec->Addr : 0) + IS->getOffset(Offset);
+    const OutputSectionBase *OutSec = IS->getOutputSection();
+    uintX_t VA = (OutSec ? OutSec->Addr : 0) + IS->getOffset(Offset);
     if (D.isTls() && !Config->Relocatable) {
       if (!Out<ELFT>::TlsPhdr)
         fatal(toString(D.File) +
@@ -79,11 +79,11 @@ static typename ELFT::uint getSymVA(const SymbolBody &Body,
            cast<DefinedCommon>(Body).Offset;
   case SymbolBody::SharedKind: {
     auto &SS = cast<SharedSymbol<ELFT>>(Body);
-    if (!SS.NeedsCopyOrPltAddr)
-      return 0;
-    if (SS.isFunc())
+    if (SS.NeedsCopy)
+      return SS.Section->OutSec->Addr + SS.Section->OutSecOff;
+    if (SS.NeedsPltAddr)
       return Body.getPltVA<ELFT>();
-    return SS.getBssSectionForCopy()->Addr + SS.CopyOffset;
+    return 0;
   }
   case SymbolBody::UndefinedKind:
     return 0;
@@ -97,10 +97,9 @@ static typename ELFT::uint getSymVA(const SymbolBody &Body,
 
 SymbolBody::SymbolBody(Kind K, StringRefZ Name, bool IsLocal, uint8_t StOther,
                        uint8_t Type)
-    : SymbolKind(K), NeedsCopyOrPltAddr(false), IsLocal(IsLocal),
+    : SymbolKind(K), NeedsCopy(false), NeedsPltAddr(false), IsLocal(IsLocal),
       IsInGlobalMipsGot(false), Is32BitMipsGot(false), IsInIplt(false),
-      IsInIgot(false), CopyIsInBssRelRo(false), Type(Type), StOther(StOther),
-      Name(Name) {}
+      IsInIgot(false), Type(Type), StOther(StOther), Name(Name) {}
 
 // Returns true if a symbol can be replaced at load-time by a symbol
 // with the same name defined in other ELF executable or DSO.
@@ -112,7 +111,7 @@ bool SymbolBody::isPreemptible() const {
   // symbols with copy relocations (which resolve to .bss) or preempt plt
   // entries (which resolve to that plt entry).
   if (isShared())
-    return !NeedsCopyOrPltAddr;
+    return !NeedsCopy && !NeedsPltAddr;
 
   // That's all that can be preempted in a non-DSO.
   if (!Config->Shared)
@@ -133,7 +132,7 @@ bool SymbolBody::isPreemptible() const {
 }
 
 template <class ELFT>
-typename ELFT::uint SymbolBody::getVA(typename ELFT::uint Addend) const {
+typename ELFT::uint SymbolBody::getVA(int64_t Addend) const {
   typename ELFT::uint OutVA = getSymVA<ELFT>(*this, Addend);
   return OutVA + Addend;
 }
@@ -229,12 +228,6 @@ Undefined::Undefined(StringRefZ Name, bool IsLocal, uint8_t StOther,
   this->File = File;
 }
 
-template <typename ELFT>
-OutputSection<ELFT> *SharedSymbol<ELFT>::getBssSectionForCopy() const {
-  assert(needsCopy());
-  return CopyIsInBssRelRo ? Out<ELFT>::BssRelRo : Out<ELFT>::Bss;
-}
-
 DefinedCommon::DefinedCommon(StringRef Name, uint64_t Size, uint64_t Alignment,
                              uint8_t StOther, uint8_t Type, InputFile *File)
     : Defined(SymbolBody::DefinedCommonKind, Name, /*IsLocal=*/false, StOther,
@@ -319,10 +312,10 @@ std::string lld::toString(const SymbolBody &B) {
   return B.getName();
 }
 
-template uint32_t SymbolBody::template getVA<ELF32LE>(uint32_t) const;
-template uint32_t SymbolBody::template getVA<ELF32BE>(uint32_t) const;
-template uint64_t SymbolBody::template getVA<ELF64LE>(uint64_t) const;
-template uint64_t SymbolBody::template getVA<ELF64BE>(uint64_t) const;
+template uint32_t SymbolBody::template getVA<ELF32LE>(int64_t) const;
+template uint32_t SymbolBody::template getVA<ELF32BE>(int64_t) const;
+template uint64_t SymbolBody::template getVA<ELF64LE>(int64_t) const;
+template uint64_t SymbolBody::template getVA<ELF64BE>(int64_t) const;
 
 template uint32_t SymbolBody::template getGotVA<ELF32LE>() const;
 template uint32_t SymbolBody::template getGotVA<ELF32BE>() const;
