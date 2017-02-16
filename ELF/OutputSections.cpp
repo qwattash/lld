@@ -581,13 +581,13 @@ OutputSectionFactory<ELFT>::create(InputSectionBase<ELFT> *C,
   if (Sec) {
     if (getIncompatibleFlags(Sec->Flags) != getIncompatibleFlags(C->Flags))
       error("Section has flags incompatible with others with the same name " +
-            toString(C));
+            toString(C) + ": " +  Twine(getIncompatibleFlags(Sec->Flags)) + " vs " + Twine(getIncompatibleFlags(C->Flags)));
     if (Sec->Type != C->Type) {
       if (canMergeToProgbits(Sec->Type) && canMergeToProgbits(C->Type))
         Sec->Type = SHT_PROGBITS;
       else
         error("Section has different type from others with the same name " +
-              toString(C));
+              toString(C)+ ": " +  Twine(Sec->Type) + " vs " + Twine(C->Type));
     }
     Sec->Flags |= Flags;
     return {Sec, false};
