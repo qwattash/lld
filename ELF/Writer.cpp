@@ -53,7 +53,6 @@ private:
   void copyLocalSymbols();
   void addSectionSymbols();
   void addReservedSymbols();
-  void addInputSec(InputSectionBase<ELFT> *S);
   void createSections();
   void forEachRelSec(std::function<void(InputSectionBase<ELFT> &)> Fn);
   void sortSections();
@@ -79,7 +78,7 @@ private:
   std::unique_ptr<FileOutputBuffer> Buffer;
 
   std::vector<OutputSectionBase *> OutputSections;
-  OutputSectionFactory<ELFT> Factory;
+  OutputSectionFactory<ELFT> Factory{OutputSections};
 
   void addRelIpltSymbols();
   void addStartEndSymbols();
@@ -98,6 +97,18 @@ private:
 StringRef elf::getOutputSectionName(StringRef Name) {
   if (Config->Relocatable)
     return Name;
+
+  // If -emit-relocs is given (which is rare), we need to copy
+  // relocation sections to the output. If input section .foo is
+  // output as .bar, we want to rename .rel.foo .rel.bar as well.
+  if (Config->EmitRelocs) {
+    for (StringRef V : {".rel.", ".rela."}) {
+      if (Name.startswith(V)) {
+        StringRef Inner = getOutputSectionName(Name.substr(V.size() - 1));
+        return Saver.save(Twine(V.drop_back()) + Inner);
+      }
+    }
+  }
 
   for (StringRef V :
        {".text.", ".rodata.", ".data.rel.ro.", ".data.", ".bss.",
@@ -118,15 +129,6 @@ StringRef elf::getOutputSectionName(StringRef Name) {
   if (Name.startswith(".zdebug_"))
     return Saver.save(Twine(".") + Name.substr(2));
   return Name;
-}
-
-template <class ELFT> void elf::reportDiscarded(InputSectionBase<ELFT> *IS) {
-  if (IS == In<ELFT>::ShStrTab)
-    error("discarding .shstrtab section is not allowed");
-  if (!Config->PrintGcSections)
-    return;
-  errs() << "removing unused section from '" << IS->Name << "' in file '"
-         << IS->getFile()->getName() << "'\n";
 }
 
 template <class ELFT> static bool needsInterpSection() {
@@ -918,27 +920,10 @@ void Writer<ELFT>::forEachRelSec(
   }
 }
 
-template <class ELFT>
-void Writer<ELFT>::addInputSec(InputSectionBase<ELFT> *IS) {
-  if (!IS)
-    return;
-
-  if (!IS->Live) {
-    reportDiscarded(IS);
-    return;
-  }
-  OutputSectionBase *Sec;
-  bool IsNew;
-  StringRef OutsecName = getOutputSectionName(IS->Name);
-  std::tie(Sec, IsNew) = Factory.create(IS, OutsecName);
-  if (IsNew)
-    OutputSections.push_back(Sec);
-  Sec->addSection(IS);
-}
-
 template <class ELFT> void Writer<ELFT>::createSections() {
   for (InputSectionBase<ELFT> *IS : Symtab<ELFT>::X->Sections)
-    addInputSec(IS);
+    if (IS)
+      Factory.addInputSec(IS, getOutputSectionName(IS->Name));
 
   sortBySymbolsOrder<ELFT>(OutputSections);
   // sortInitFini<ELFT>(findSection(".preinit_array")); // XXXAR: should we also do this?
@@ -1119,13 +1104,7 @@ template <class ELFT> void Writer<ELFT>::finalizeSections() {
   if (In<ELFT>::Iplt && !In<ELFT>::Iplt->empty())
     In<ELFT>::Iplt->addSymbols();
 
-  // Some architectures use small displacements for jump instructions.
-  // It is linker's responsibility to create thunks containing long
-  // jump instructions if jump targets are too far. Create thunks.
-  if (Target->NeedsThunks)
-    createThunks<ELFT>(OutputSections);
-
-  // Now that we have defined all possible symbols including linker-
+  // Now that we have defined all possible global symbols including linker-
   // synthesized ones. Visit all symbols to give the finishing touches.
   for (Symbol *S : Symtab<ELFT>::X->getSymbols()) {
     SymbolBody *Body = S->body();
@@ -1174,6 +1153,12 @@ template <class ELFT> void Writer<ELFT>::finalizeSections() {
     addPtArmExid(Phdrs);
     fixHeaders();
   }
+
+  // Some architectures use small displacements for jump instructions.
+  // It is linker's responsibility to create thunks containing long
+  // jump instructions if jump targets are too far. Create thunks.
+  if (Target->NeedsThunks)
+    createThunks<ELFT>(OutputSections);
 
   // Fill other section headers. The dynamic table is finalized
   // at the end because some tags like RELSZ depend on result
@@ -1527,7 +1512,7 @@ static uintX_t getFileAlignment(uintX_t Off, OutputSectionBase *Sec) {
 }
 
 template <class ELFT, class uintX_t>
-uintX_t setOffset(OutputSectionBase *Sec, uintX_t Off) {
+static uintX_t setOffset(OutputSectionBase *Sec, uintX_t Off) {
   if (Sec->Type == SHT_NOBITS) {
     Sec->Offset = Off;
     return Off;
@@ -1874,8 +1859,3 @@ template bool elf::isRelroSection<ELF32LE>(const OutputSectionBase *);
 template bool elf::isRelroSection<ELF32BE>(const OutputSectionBase *);
 template bool elf::isRelroSection<ELF64LE>(const OutputSectionBase *);
 template bool elf::isRelroSection<ELF64BE>(const OutputSectionBase *);
-
-template void elf::reportDiscarded<ELF32LE>(InputSectionBase<ELF32LE> *);
-template void elf::reportDiscarded<ELF32BE>(InputSectionBase<ELF32BE> *);
-template void elf::reportDiscarded<ELF64LE>(InputSectionBase<ELF64LE> *);
-template void elf::reportDiscarded<ELF64BE>(InputSectionBase<ELF64BE> *);
