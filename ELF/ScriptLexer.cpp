@@ -120,16 +120,28 @@ void ScriptLexer::tokenize(MemoryBufferRef MB) {
       continue;
     }
 
+
+    size_t Pos = StringRef::npos;
+    size_t SearchStart = 0;
     // Unquoted token. This is more relaxed than tokens in C-like language,
     // so that you can write "file-name.cpp" as one bare token, for example.
-    size_t Pos = S.find_first_not_of(
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
-        "0123456789_.$/\\~=+[]*?-!<>^");
+    for (;;) {
+      Pos = S.find_first_not_of(
+          "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
+          "0123456789_.$/\\~=+[]*?-!<>^", SearchStart);
 
-    // A character that cannot start a word (which is usually a
-    // punctuation) forms a single character token.
-    if (Pos == 0)
-      Pos = 1;
+      // A character that cannot start a word (which is usually a
+      // punctuation) forms a single character token.
+      if (Pos == 0)
+        Pos = 1;
+      else if (S.substr(Pos).startswith("::")) {
+        // handle C++ names in version scripts (i.e. anything that contains a ::
+        // as long as the token doesn't start with ::)
+        SearchStart = Pos + 2;
+        continue;
+      }
+      break;
+    }
     Vec.push_back(S.substr(0, Pos));
     S = S.substr(Pos);
   }
