@@ -499,6 +499,8 @@ template <class ELFT> void LinkerScript<ELFT>::process(BaseCommand &Base) {
         continue;
 
     auto *IB = static_cast<InputSectionBase<ELFT> *>(ID);
+    if (!IB->OutSec)
+      continue;     // XXXAR: is this correct?
     switchTo(IB->OutSec);
     if (auto *I = dyn_cast<InputSection<ELFT>>(IB))
       output(I);
