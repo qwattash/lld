@@ -1,4 +1,4 @@
-//===- ScriptParser.cpp ---------------------------------------------------===//
+//===- ScriptLexer.cpp ----------------------------------------------------===//
 //
 //                             The LLVM Linker
 //
@@ -7,12 +7,32 @@
 //
 //===----------------------------------------------------------------------===//
 //
-// This file contains the base parser class for linker script and dynamic
-// list.
+// This file defines a lexer for the linker script.
+//
+// The linker script's grammar is not complex but ambiguous due to the
+// lack of the formal specification of the language. What we are trying to
+// do in this and other files in LLD is to make a "reasonable" linker
+// script processor.
+//
+// Among simplicity, compatibility and efficiency, we put the most
+// emphasis on simplicity when we wrote this lexer. Compatibility with the
+// GNU linkers is important, but we did not try to clone every tiny corner
+// case of their lexers, as even ld.bfd and ld.gold are subtly different
+// in various corner cases. We do not care much about efficiency because
+// the time spent in parsing linker scripts is usually negligible.
+//
+// Our grammar of the linker script is LL(2), meaning that it needs at
+// most two-token lookahead to parse. The only place we need two-token
+// lookahead is labels in version scripts, where we need to parse "local :"
+// as if "local:".
+//
+// Overall, this lexer works fine for most linker scripts. There might
+// be room for improving compatibility, but that's probably not at the
+// top of our todo list.
 //
 //===----------------------------------------------------------------------===//
 
-#include "ScriptParser.h"
+#include "ScriptLexer.h"
 #include "Error.h"
 #include "llvm/ADT/Twine.h"
 
@@ -21,7 +41,7 @@ using namespace lld;
 using namespace lld::elf;
 
 // Returns a whole line containing the current token.
-StringRef ScriptParserBase::getLine() {
+StringRef ScriptLexer::getLine() {
   StringRef S = getCurrentMB().getBuffer();
   StringRef Tok = Tokens[Pos - 1];
 
@@ -32,29 +52,29 @@ StringRef ScriptParserBase::getLine() {
 }
 
 // Returns 1-based line number of the current token.
-size_t ScriptParserBase::getLineNumber() {
+size_t ScriptLexer::getLineNumber() {
   StringRef S = getCurrentMB().getBuffer();
   StringRef Tok = Tokens[Pos - 1];
   return S.substr(0, Tok.data() - S.data()).count('\n') + 1;
 }
 
 // Returns 0-based column number of the current token.
-size_t ScriptParserBase::getColumnNumber() {
+size_t ScriptLexer::getColumnNumber() {
   StringRef Tok = Tokens[Pos - 1];
   return Tok.data() - getLine().data();
 }
 
-std::string ScriptParserBase::getCurrentLocation() {
+std::string ScriptLexer::getCurrentLocation() {
   std::string Filename = getCurrentMB().getBufferIdentifier();
   if (!Pos)
     return Filename;
   return (Filename + ":" + Twine(getLineNumber())).str();
 }
 
-ScriptParserBase::ScriptParserBase(MemoryBufferRef MB) { tokenize(MB); }
+ScriptLexer::ScriptLexer(MemoryBufferRef MB) { tokenize(MB); }
 
 // We don't want to record cascading errors. Keep only the first one.
-void ScriptParserBase::setError(const Twine &Msg) {
+void ScriptLexer::setError(const Twine &Msg) {
   if (Error)
     return;
   Error = true;
@@ -71,7 +91,7 @@ void ScriptParserBase::setError(const Twine &Msg) {
 }
 
 // Split S into linker script tokens.
-void ScriptParserBase::tokenize(MemoryBufferRef MB) {
+void ScriptLexer::tokenize(MemoryBufferRef MB) {
   std::vector<StringRef> Vec;
   MBs.push_back(MB);
   StringRef S = MB.getBuffer();
@@ -104,7 +124,7 @@ void ScriptParserBase::tokenize(MemoryBufferRef MB) {
     // so that you can write "file-name.cpp" as one bare token, for example.
     size_t Pos = S.find_first_not_of(
         "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
-        "0123456789_.$/\\~=+[]*?-:!<>^");
+        "0123456789_.$/\\~=+[]*?-!<>^");
 
     // A character that cannot start a word (which is usually a
     // punctuation) forms a single character token.
@@ -118,7 +138,7 @@ void ScriptParserBase::tokenize(MemoryBufferRef MB) {
 }
 
 // Skip leading whitespace characters or comments.
-StringRef ScriptParserBase::skipSpace(StringRef S) {
+StringRef ScriptLexer::skipSpace(StringRef S) {
   for (;;) {
     if (S.startswith("/*")) {
       size_t E = S.find("*/", 2);
@@ -144,9 +164,62 @@ StringRef ScriptParserBase::skipSpace(StringRef S) {
 }
 
 // An erroneous token is handled as if it were the last token before EOF.
-bool ScriptParserBase::atEOF() { return Error || Tokens.size() == Pos; }
+bool ScriptLexer::atEOF() { return Error || Tokens.size() == Pos; }
 
-StringRef ScriptParserBase::next() {
+// Split a given string as an expression.
+// This function returns "3", "*" and "5" for "3*5" for example.
+static std::vector<StringRef> tokenizeExpr(StringRef S) {
+  StringRef Ops = "+-*/"; // List of operators
+
+  // Quoted strings are literal strings, so we don't want to split it.
+  if (S.startswith("\""))
+    return {S};
+
+  // Split S with +-*/ as separators.
+  std::vector<StringRef> Ret;
+  while (!S.empty()) {
+    size_t E = S.find_first_of(Ops);
+
+    // No need to split if there is no operator.
+    if (E == StringRef::npos) {
+      Ret.push_back(S);
+      break;
+    }
+
+    // Get a token before the opreator.
+    if (E != 0)
+      Ret.push_back(S.substr(0, E));
+
+    // Get the operator as a token.
+    Ret.push_back(S.substr(E, 1));
+    S = S.substr(E + 1);
+  }
+  return Ret;
+}
+
+// In contexts where expressions are expected, the lexer should apply
+// different tokenization rules than the default one. By default,
+// arithmetic operator characters are regular characters, but in the
+// expression context, they should be independent tokens.
+//
+// For example, "foo*3" should be tokenized to "foo", "*" and "3" only
+// in the expression context.
+//
+// This function may split the current token into multiple tokens.
+void ScriptLexer::maybeSplitExpr() {
+  if (!InExpr || Error || atEOF())
+    return;
+
+  std::vector<StringRef> V = tokenizeExpr(Tokens[Pos]);
+  if (V.size() == 1)
+    return;
+  Tokens.erase(Tokens.begin() + Pos);
+  Tokens.insert(Tokens.begin() + Pos, V.begin(), V.end());
+}
+
+StringRef ScriptLexer::next() {
+  maybeSplitExpr();
+
   if (Error)
     return "";
   if (atEOF()) {
@@ -156,15 +229,18 @@ StringRef ScriptParserBase::next() {
   return Tokens[Pos++];
 }
 
-StringRef ScriptParserBase::peek() {
-  StringRef Tok = next();
-  if (Error)
-    return "";
-  --Pos;
+StringRef ScriptLexer::peek(unsigned N) {
+  StringRef Tok;
+  for (unsigned I = 0; I <= N; ++I) {
+    Tok = next();
+    if (Error)
+      return "";
+  }
+  Pos = Pos - N - 1;
   return Tok;
 }
 
-bool ScriptParserBase::consume(StringRef Tok) {
+bool ScriptLexer::consume(StringRef Tok) {
   if (peek() == Tok) {
     skip();
     return true;
@@ -172,9 +248,9 @@ bool ScriptParserBase::consume(StringRef Tok) {
   return false;
 }
 
-void ScriptParserBase::skip() { (void)next(); }
+void ScriptLexer::skip() { (void)next(); }
 
-void ScriptParserBase::expect(StringRef Expect) {
+void ScriptLexer::expect(StringRef Expect) {
   if (Error)
     return;
   StringRef Tok = next();
@@ -187,7 +263,7 @@ static bool encloses(StringRef S, StringRef T) {
   return S.bytes_begin() <= T.bytes_begin() && T.bytes_end() <= S.bytes_end();
 }
 
-MemoryBufferRef ScriptParserBase::getCurrentMB() {
+MemoryBufferRef ScriptLexer::getCurrentMB() {
   // Find input buffer containing the current token.
   assert(!MBs.empty());
   if (!Pos)
