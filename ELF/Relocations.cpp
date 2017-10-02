@@ -363,15 +363,6 @@ static bool isStaticLinkTimeConstant(RelExpr E, RelType Type,
                      R_PPC_PLT_OPD, R_TLSDESC_CALL, R_TLSDESC_PAGE, R_HINT>(E))
     return true;
 
-  // XXX: No they're not; REL32/64/NONE is emitted to relocate the struct
-  //      contents? Alternatively, if they are treated as constants and these
-  //      relocations aren't emitted, RTLD needs updating to add relocbase.
-  //if (S.Name == "__cap_relocs") {
-  //    // cap relocs are always link time constants (even in PIC code)
-  //    // errs() << toString(E) << format("(%d)+(0x%llx) against ", Type, (unsigned long long)RelOff) << toString(Body) << ": absval=" << AbsVal << ", isRelExpr(E)=" << RelE << "\n";
-  //    return true;
-  //}
-
   // These never do, except if the entire file is position dependent or if
   // only the low bits are used.
   if (E == R_GOT || E == R_PLT || E == R_TLSDESC)
