@@ -545,6 +545,8 @@ static void errorOrWarn(const Twine &Msg) {
 template <class ELFT>
 static RelExpr adjustExpr(SymbolBody &Body, RelExpr Expr, RelType Type,
                           InputSectionBase &S, uint64_t RelOff) {
+  if (Expr == R_CHERI_CAPABILITY)
+    return Expr;
   // We can create any dynamic relocation if a section is simply writable.
   if (S.Flags & SHF_WRITE)
     return Expr;
@@ -926,6 +928,31 @@ static void scanRelocs(InputSectionBase &Sec, ArrayRef<RelTy> Rels) {
 
     // Read an addend.
     int64_t Addend = computeAddend<ELFT>(Rel, End, Sec, Expr, Body.isLocal());
+
+    if (Expr == R_CHERI_CAPABILITY) {
+      assert(Config->ProcessCapRelocs);
+      bool NeedsDynReloc = Body.IsPreemptible;
+      std::string SymbolHackName = ("__caprelocs_hack_" + Sec.Name).str();
+      auto LocationSym = Symtab->find(SymbolHackName);
+      if (!LocationSym) {
+        // XXXAR: we are modifying the symbol table in code that can run
+        // concurrently so we need a mutex here
+        static std::mutex Mu;
+        std::lock_guard<std::mutex> Lock(Mu);
+        LocationSym = Symtab->find(SymbolHackName);
+        if (!LocationSym) {
+          Symtab->addRegular<ELFT>(Saver.save(SymbolHackName), STV_DEFAULT,
+                                   STT_SECTION, 0, Sec.getOutputSection()->Size,
+                                   STB_LOCAL, &Sec, Sec.File);
+          LocationSym = Symtab->find(SymbolHackName);
+          assert(LocationSym);
+        }
+      }
+      In<ELFT>::CapRelocs->addCapReloc({LocationSym, Offset}, Config->Pic,
+                                       {&Body, 0u}, NeedsDynReloc, Addend);
+      // TODO: check if it needs a plt stub
+      continue;
+    }
 
     // Process some TLS relocations, including relaxing TLS relocations.
     // Note that this function does not handle all TLS relocations.

@@ -649,6 +649,8 @@ static uint64_t getRelocTargetVA(const InputFile &File, RelType Type,
     return InX::Got->getTlsIndexOff() + A - InX::Got->getSize();
   case R_TLSLD_PC:
     return InX::Got->getTlsIndexVA() + A - P;
+  case R_CHERI_CAPABILITY:
+    llvm_unreachable("R_CHERI_CAPABILITY should not be handled here!");
   }
   llvm_unreachable("Invalid expression");
 }
