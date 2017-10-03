@@ -398,8 +398,10 @@ std::string lld::verboseToString(SymbolBody *B, uint64_t SymOffset) {
     Msg += "object ";
   else if (B->isFile())
     Msg += "object ";
+  else if (B->isUndefined())
+    Msg += "<undefined> ";
   else
-    Msg += "<unknown kind>";
+    Msg += "<unknown kind> ";
 
   if (B->isInCurrentDSO())
     Msg += "(in current DSO) ";
