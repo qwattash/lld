@@ -51,6 +51,7 @@
 #include "SyntheticSections.h"
 #include "Target.h"
 #include "Thunks.h"
+#include "Arch/Cheri.h"
 
 #include "llvm/Support/Endian.h"
 #include "llvm/Support/Format.h"
