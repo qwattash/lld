@@ -1112,8 +1112,18 @@ template <class ELFT> void LinkerDriver::link(opt::InputArgList &Args) {
     for (InputSectionBase *S : F->getSections())
       InputSections.push_back(cast<InputSection>(S));
 
-  if (Config->EMachine == EM_MIPS)
+  if (Config->EMachine == EM_MIPS) {
     Config->MipsEFlags = calcMipsEFlags<ELFT>();
+    // Compute the size of a CHERI capability based on the MIPS ABI flags:
+    if ((Config->MipsEFlags & EF_MIPS_MACH) == EF_MIPS_MACH_CHERI128)
+      Config->CapabilitySize = 16;
+    if ((Config->MipsEFlags & EF_MIPS_MACH) == EF_MIPS_MACH_CHERI256)
+      Config->CapabilitySize = 32;
+  }
+  // CapabilitySize must be set if we are targetting the purecap ABI
+  if (Config->MipsCheriAbi)
+    assert(Config->CapabilitySize > 0);
+
 
   // This adds a .comment section containing a version string. We have to add it
   // before decompressAndMergeSections because the .comment section is a
