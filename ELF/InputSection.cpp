@@ -687,7 +687,7 @@ void InputSection::relocateNonAlloc(uint8_t *Buf, ArrayRef<RelTy> Rels) {
     uint64_t AddrLoc = getParent()->Addr + Offset;
     uint64_t SymVA = 0;
     if (!Sym.isTls() || Out::TlsPhdr)
-      SymVA = SignExtend64<sizeof(typename ELFT::uint) * 8>(
+      SymVA = SignExtend64<Bits>(
           getRelocTargetVA(*File, Type, Addend, AddrLoc, Sym, R_ABS));
     Target->relocateOne(BufLoc, Type, SymVA);
   }
