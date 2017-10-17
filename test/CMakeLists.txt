@@ -14,6 +14,7 @@ if(LLD_BUILT_STANDALONE)
 endif()
 
 llvm_canonicalize_cmake_booleans(
+  LLVM_CHERI_IS_128
   HAVE_LIBZ)
 
 configure_lit_site_cfg(
