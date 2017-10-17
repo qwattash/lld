@@ -39,6 +39,7 @@ DefinedRegular *ElfSym::GlobalOffsetTable;
 DefinedRegular *ElfSym::MipsGp;
 DefinedRegular *ElfSym::MipsGpDisp;
 DefinedRegular *ElfSym::MipsLocalGp;
+DefinedRegular *ElfSym::CheriCapabilityTable;
 
 static uint64_t getSymVA(const SymbolBody &Body, int64_t &Addend) {
   switch (Body.kind()) {

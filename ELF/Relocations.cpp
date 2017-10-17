@@ -361,7 +361,8 @@ static bool isStaticLinkTimeConstant(RelExpr E, RelType Type,
                      R_MIPS_GOT_OFF, R_MIPS_GOT_OFF32, R_MIPS_GOT_GP_PC,
                      R_MIPS_TLSGD, R_GOT_PAGE_PC, R_GOT_PC, R_GOTONLY_PC,
                      R_GOTONLY_PC_FROM_END, R_PLT_PC, R_TLSGD_PC, R_TLSGD,
-                     R_PPC_PLT_OPD, R_TLSDESC_CALL, R_TLSDESC_PAGE, R_HINT>(E))
+                     R_PPC_PLT_OPD, R_TLSDESC_CALL, R_TLSDESC_PAGE, R_HINT,
+                     R_CHERI_CAPABILITY_TABLE_INDEX>(E))
     return true;
 
   // These never do, except if the entire file is position dependent or if
@@ -851,6 +852,12 @@ static void addGotEntry(SymbolBody &Sym, bool Preemptible) {
     InX::Got->Relocations.push_back({R_ABS, Target->GotRel, Off, 0, &Sym});
 }
 
+template <class ELFT>
+static void addCapbilityTableEntry(SymbolBody &Sym, bool Preemptible) {
+  // FIXME: TLS Symbols should also go into the capability table!
+
+}
+
 // The reason we have to do this early scan is as follows
 // * To mmap the output file, we need to know the size
 // * For that, we need to know how many dynamic relocs we will have.
@@ -956,6 +963,29 @@ static void scanRelocs(InputSectionBase &Sec, ArrayRef<RelTy> Rels) {
       In<ELFT>::CapRelocs->addCapReloc({LocationSym, Offset}, Config->Pic,
                                        {&Body, 0u}, NeedsDynReloc, Addend);
       // TODO: check if it needs a plt stub
+      continue;
+    }
+    if (Expr == R_CHERI_CAPABILITY_TABLE_INDEX) {
+      assert(Config->ProcessCapRelocs);
+      uint32_t Index = InX::CheriCapTable->addEntry(Body);
+      assert(Addend == 0);
+      // FIXME: locking?
+      if (!ElfSym::CheriCapabilityTable)
+        ElfSym::CheriCapabilityTable = cast<DefinedRegular>(
+            Symtab
+                ->addRegular<ELFT>("_CHERI_CAPABILITY_TABLE_", STV_HIDDEN,
+                                   STT_SECTION,
+                                   /*Value=*/0, /*Size=*/0, STB_LOCAL,
+                                   InX::CheriCapTable, nullptr)
+                ->body());
+      In<ELFT>::CapRelocs->addCapReloc(
+        {ElfSym::CheriCapabilityTable, Index * Config->CapabilitySize}, Config->Pic,
+                                       {&Body, 0u}, Body.IsPreemptible, Addend);
+      if (Config->Pic) {
+        error("Cannot add capability table entries for PIC code yet!");
+      }
+      // Write out the index into the instruction
+      Sec.Relocations.push_back({Expr, Type, Offset, Addend, &Body});
       continue;
     }
 

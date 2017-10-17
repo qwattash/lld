@@ -856,6 +856,7 @@ private:
 
 // Can only be forward declared here since it depends on SyntheticSection
 template <class ELFT> class CheriCapRelocsSection;
+class CheriCapTableSection;
 
 template <class ELFT> void createCommonSections();
 InputSection *createInterpSection();
@@ -889,6 +890,7 @@ struct InX {
   static StringTableSection *ShStrTab;
   static StringTableSection *StrTab;
   static SymbolTableBaseSection *SymTab;
+  static CheriCapTableSection *CheriCapTable;
 };
 
 template <class ELFT> struct In : public InX {

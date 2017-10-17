@@ -20,6 +20,7 @@
 #include "SyntheticSections.h"
 #include "Target.h"
 #include "Thunks.h"
+#include "Arch/Cheri.h"
 #include "llvm/Object/Decompressor.h"
 #include "llvm/Support/Compiler.h"
 #include "llvm/Support/Compression.h"
@@ -93,7 +94,8 @@ InputSectionBase::InputSectionBase(InputFile *File, uint64_t Flags,
   // no alignment constraits.
   uint32_t V = std::max<uint64_t>(Alignment, 1);
   if (!isPowerOf2_64(V))
-    fatal(toString(File) + ": section sh_addralign is not a power of 2");
+    fatal(toString(File) + ": section " + Name +
+          " sh_addralign is not a power of 2");
   this->Alignment = V;
 }
 
@@ -651,6 +653,8 @@ static uint64_t getRelocTargetVA(const InputFile &File, RelType Type,
     return InX::Got->getTlsIndexVA() + A - P;
   case R_CHERI_CAPABILITY:
     llvm_unreachable("R_CHERI_CAPABILITY should not be handled here!");
+  case R_CHERI_CAPABILITY_TABLE_INDEX:
+    return Config->CapabilitySize * InX::CheriCapTable->getIndex(Body) + A;
   }
   llvm_unreachable("Invalid expression");
 }
