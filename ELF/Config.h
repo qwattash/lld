@@ -237,7 +237,7 @@ struct Configuration {
   int Wordsize;
 
   // Size of a CHERI capability
-  int CapabilitySize = -1;
+  int CapabilitySize = 0;
 };
 
 // The only instance of Configuration struct.
