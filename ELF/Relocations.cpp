@@ -975,7 +975,7 @@ static void scanRelocs(InputSectionBase &Sec, ArrayRef<RelTy> Rels) {
             Symtab
                 ->addRegular<ELFT>("_CHERI_CAPABILITY_TABLE_", STV_HIDDEN,
                                    STT_SECTION,
-                                   /*Value=*/0, /*Size=*/0, STB_LOCAL,
+                                   /*Value=*/0, /*Size=*/0, STB_GLOBAL,
                                    InX::CheriCapTable, nullptr)
                 ->body());
       In<ELFT>::CapRelocs->addCapReloc(

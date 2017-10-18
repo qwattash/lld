@@ -831,18 +831,9 @@ template <class ELFT> void Writer<ELFT>::addReservedSymbols() {
   ElfSym::GlobalOffsetTable = addOptionalRegular<ELFT>(
       "_GLOBAL_OFFSET_TABLE_", GotSection, Target->GotBaseSymOff);
 
-#if 0
-  // FIXME: we don't want to add this symbol if it is not being used
-  // for now I just moved this to relocations.cpp but that seems like it
-  // could cause threading issues
-  if (InX::CheriCapTable)
-    ElfSym::CheriCapabilityTable = cast<DefinedRegular>(
-        Symtab
-            ->addRegular<ELFT>("_CHERI_CAPABILITY_TABLE_", STV_HIDDEN,
-                               STT_SECTION, /*Value=*/0, /*Size=*/0, STB_LOCAL,
-                               InX::CheriCapTable, nullptr)
-            ->body());
-#endif
+  if (InX::CheriCapTable && !ElfSym::CheriCapabilityTable)
+    ElfSym::CheriCapabilityTable = addOptionalRegular<ELFT>(
+      "_CHERI_CAPABILITY_TABLE_", InX::CheriCapTable, 0);
 
   // __ehdr_start is the location of ELF file headers. Note that we define
   // this symbol unconditionally even when using a linker script, which
