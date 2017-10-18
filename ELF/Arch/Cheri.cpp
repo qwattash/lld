@@ -64,7 +64,11 @@ static SymbolAndOffset sectionWithOffsetToSymbol(InputSectionBase *IS,
                                                  SymbolBody *Src) {
   SymbolBody *FallbackResult = nullptr;
   uint64_t FallbackOffset = Offset;
-  for (SymbolBody *B : IS->getFile<ELFT>()->getSymbols()) {
+  // For internal symbols we don't have a matching InputFile, just return
+  auto* File = IS->getFile<ELFT>();
+  if (!File)
+    return {Src, Offset};
+  for (SymbolBody *B : File->getSymbols()) {
     if (auto *D = dyn_cast<DefinedRegular>(B)) {
       if (D->Section != IS)
         continue;
@@ -317,7 +321,8 @@ template <class ELFT> void CheriCapRelocsSection<ELFT>::writeTo(uint8_t *Buf) {
       if (OutputSection *OS = Reloc.Target.Symbol->getOutputSection()) {
         assert(TargetVA >= OS->Addr);
         uint64_t OffsetInOS = TargetVA - OS->Addr;
-        assert(OffsetInOS < OS->Size);
+        // Use less-or-equal here to account for __end_foo symbols which point 1 past the section
+        assert(OffsetInOS <= OS->Size);
         TargetSize = OS->Size - OffsetInOS;
 #if 0
         if (Config->VerboseCapRelocs)
