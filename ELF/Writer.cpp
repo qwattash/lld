@@ -1313,6 +1313,9 @@ template <class ELFT> void Writer<ELFT>::finalizeSections() {
     applySynthetic({In<ELFT>::CapRelocs},
                    [](SyntheticSection *SS) { SS->finalizeContents(); });
   }
+  if (InX::CheriCapTable) {
+    InX::CheriCapTable->addCapTableSymbols<ELFT>();
+  }
 
   if (InX::Plt && !InX::Plt->empty())
     InX::Plt->addSymbols();

@@ -1,5 +1,7 @@
 #include "Cheri.h"
+#include "../Memory.h"
 #include "../OutputSections.h"
+#include "../SymbolTable.h"
 #include "../SyntheticSections.h"
 #include "../Target.h"
 
@@ -388,12 +390,28 @@ uint32_t CheriCapTableSection::getIndex(const SymbolBody &Sym) const {
   return it->second;
 }
 
+template <class ELFT> void CheriCapTableSection::addCapTableSymbols() {
+  for (auto &it : Entries) {
+    StringRef Name = it.first->getName();
+    if (Name.empty())
+      continue;
+    Symtab->addRegular<ELFT>(Saver.save(Name + "@CAPTABLE"), STV_HIDDEN,
+                             STT_OBJECT, it.second * Config->CapabilitySize,
+                             Config->CapabilitySize, STB_LOCAL, this, nullptr);
+  }
+}
+
 CheriCapTableSection *InX::CheriCapTable;
 
 template class elf::CheriCapRelocsSection<ELF32LE>;
 template class elf::CheriCapRelocsSection<ELF32BE>;
 template class elf::CheriCapRelocsSection<ELF64LE>;
 template class elf::CheriCapRelocsSection<ELF64BE>;
+
+template void CheriCapTableSection::addCapTableSymbols<ELF32LE>();
+template void CheriCapTableSection::addCapTableSymbols<ELF32BE>();
+template void CheriCapTableSection::addCapTableSymbols<ELF64LE>();
+template void CheriCapTableSection::addCapTableSymbols<ELF64BE>();
 
 } // namespace elf
 } // namespace lld
