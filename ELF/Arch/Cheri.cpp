@@ -390,6 +390,10 @@ template <class ELFT> void CheriCapTableSection::addCapTableSymbols() {
     StringRef Name = it.first->getName();
     if (Name.empty())
       continue;
+    // Avoid duplicate symbol name errors for unnamed string constants:
+    // XXXAR: maybe renumber them instead?
+    if (Name.startswith(".L.str"))
+      continue;
     Symtab->addRegular<ELFT>(Saver.save(Name + "@CAPTABLE"), STV_HIDDEN,
                              STT_OBJECT, it.second * Config->CapabilitySize,
                              Config->CapabilitySize, STB_LOCAL, this, nullptr);
