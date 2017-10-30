@@ -873,6 +873,11 @@ static void addCapbilityTableEntry(SymbolBody &Sym, bool Preemptible) {
 // space for the extra PT_LOAD even if we end up not using it.
 template <class ELFT, class RelTy>
 static void scanRelocs(InputSectionBase &Sec, ArrayRef<RelTy> Rels) {
+  // llvm::errs() << "Processing relocations for " << toString(&Sec) <<  ", thr=" << (void*)pthread_self() << "\n";
+
+  if (StringRef(toString(&Sec)).contains("interposing_table.o")) {
+    llvm::errs() << "interposing_table.o\n";
+  }
   OffsetGetter GetOffset(Sec);
 
   for (auto I = Rels.begin(), End = Rels.end(); I != End; ++I) {
@@ -944,26 +949,8 @@ static void scanRelocs(InputSectionBase &Sec, ArrayRef<RelTy> Rels) {
     if (Expr == R_CHERI_CAPABILITY) {
       assert(Config->ProcessCapRelocs);
       bool NeedsDynReloc = Body.IsPreemptible;
-
-      std::string SymbolHackName = ("__caprelocs_hack_" + Sec.Name).str();
-      auto LocationSym = Symtab->find(SymbolHackName);
-      if (!LocationSym) {
-        // XXXAR: we are modifying the symbol table in code that can run
-        // concurrently so we need a mutex here
-        static std::mutex Mu;
-        std::lock_guard<std::mutex> Lock(Mu);
-        LocationSym = Symtab->find(SymbolHackName);
-        if (!LocationSym) {
-          Symtab->addRegular<ELFT>(Saver.save(SymbolHackName), STV_DEFAULT,
-                                   STT_SECTION, 0, Sec.getOutputSection()->Size,
-                                   STB_LOCAL, &Sec, nullptr);
-          LocationSym = Symtab->find(SymbolHackName);
-          assert(LocationSym);
-        }
-      }
-      In<ELFT>::CapRelocs->addCapReloc({LocationSym, Offset}, Sec.File,
-                                       Config->Pic, {&Body, 0u}, NeedsDynReloc,
-                                       Addend);
+      In<ELFT>::CapRelocs->addCapReloc({&Sec, Offset, Config->Pic},
+                                       {&Body, 0u}, NeedsDynReloc, Addend);
       // TODO: check if it needs a plt stub
       continue;
     }
@@ -981,8 +968,8 @@ static void scanRelocs(InputSectionBase &Sec, ArrayRef<RelTy> Rels) {
                                    InX::CheriCapTable, nullptr)
                 ->body());
       In<ELFT>::CapRelocs->addCapReloc(
-        {ElfSym::CheriCapabilityTable, Index * Config->CapabilitySize}, nullptr,
-         Config->Pic, {&Body, 0u}, Body.IsPreemptible, Addend);
+        {InX::CheriCapTable, Index * Config->CapabilitySize, Config->Pic},
+        {&Body, 0u}, Body.IsPreemptible, Addend);
       if (Config->Pic) {
         static bool HasWarned = false;
         if (!HasWarned) {
