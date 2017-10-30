@@ -760,25 +760,27 @@ void PhdrEntry::add(OutputSection *Sec) {
 template <class ELFT>
 static Symbol *addRegular(StringRef Name, SectionBase *Sec, uint64_t Value,
                           uint8_t StOther = STV_HIDDEN,
-                          uint8_t Binding = STB_WEAK) {
+                          uint8_t Binding = STB_WEAK,
+                          uint64_t Size = 0) {
   // The linker generated symbols are added as STB_WEAK to allow user defined
   // ones to override them.
   return Symtab->addRegular<ELFT>(Name, StOther, STT_NOTYPE, Value,
-                                  /*Size=*/0, Binding, Sec,
+                                  /*Size=*/Size, Binding, Sec,
                                   /*File=*/nullptr);
 }
 
 template <class ELFT>
 static DefinedRegular *
 addOptionalRegular(StringRef Name, SectionBase *Sec, uint64_t Val,
-                   uint8_t StOther = STV_HIDDEN, uint8_t Binding = STB_GLOBAL) {
+                   uint8_t StOther = STV_HIDDEN, uint8_t Binding = STB_GLOBAL,
+                   uint64_t Size = 0) {
   SymbolBody *S = Symtab->find(Name);
   if (!S)
     return nullptr;
   if (S->isInCurrentDSO())
     return nullptr;
   return cast<DefinedRegular>(
-      addRegular<ELFT>(Name, Sec, Val, StOther, Binding)->body());
+      addRegular<ELFT>(Name, Sec, Val, StOther, Binding, Size)->body());
 }
 
 // The beginning and the ending of .rel[a].plt section are marked
@@ -1458,7 +1460,7 @@ template <class ELFT> void Writer<ELFT>::addStartEndSymbols() {
     // These symbols resolve to the image base if the section does not exist.
     // A special value -1 indicates end of the section.
     if (OS) {
-      addOptionalRegular<ELFT>(Start, OS, 0);
+      addOptionalRegular<ELFT>(Start, OS, 0, STV_HIDDEN, STB_GLOBAL, OS->Size);
       addOptionalRegular<ELFT>(End, OS, -1);
     } else {
       if (Config->Pic)
@@ -1471,6 +1473,10 @@ template <class ELFT> void Writer<ELFT>::addStartEndSymbols() {
   Define("__preinit_array_start", "__preinit_array_end", Out::PreinitArray);
   Define("__init_array_start", "__init_array_end", Out::InitArray);
   Define("__fini_array_start", "__fini_array_end", Out::FiniArray);
+  if (auto* CtorsSec = findSection(".ctors"))
+    Define("__ctors_start", "__ctors_end", CtorsSec);
+  if (auto* DtorsSec = findSection(".dtors"))
+    Define("__dtors_start", "__dtors_end", DtorsSec);
   if (InX::CheriCapTable)
     Define("__cap_table_start", "__cap_table_end",
            InX::CheriCapTable->getOutputSection());
