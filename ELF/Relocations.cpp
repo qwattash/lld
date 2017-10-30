@@ -873,11 +873,6 @@ static void addCapbilityTableEntry(SymbolBody &Sym, bool Preemptible) {
 // space for the extra PT_LOAD even if we end up not using it.
 template <class ELFT, class RelTy>
 static void scanRelocs(InputSectionBase &Sec, ArrayRef<RelTy> Rels) {
-  // llvm::errs() << "Processing relocations for " << toString(&Sec) <<  ", thr=" << (void*)pthread_self() << "\n";
-
-  if (StringRef(toString(&Sec)).contains("interposing_table.o")) {
-    llvm::errs() << "interposing_table.o\n";
-  }
   OffsetGetter GetOffset(Sec);
 
   for (auto I = Rels.begin(), End = Rels.end(); I != End; ++I) {
