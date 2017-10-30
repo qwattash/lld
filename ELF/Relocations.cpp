@@ -944,6 +944,7 @@ static void scanRelocs(InputSectionBase &Sec, ArrayRef<RelTy> Rels) {
     if (Expr == R_CHERI_CAPABILITY) {
       assert(Config->ProcessCapRelocs);
       bool NeedsDynReloc = Body.IsPreemptible;
+
       std::string SymbolHackName = ("__caprelocs_hack_" + Sec.Name).str();
       auto LocationSym = Symtab->find(SymbolHackName);
       if (!LocationSym) {
@@ -955,13 +956,14 @@ static void scanRelocs(InputSectionBase &Sec, ArrayRef<RelTy> Rels) {
         if (!LocationSym) {
           Symtab->addRegular<ELFT>(Saver.save(SymbolHackName), STV_DEFAULT,
                                    STT_SECTION, 0, Sec.getOutputSection()->Size,
-                                   STB_LOCAL, &Sec, Sec.File);
+                                   STB_LOCAL, &Sec, nullptr);
           LocationSym = Symtab->find(SymbolHackName);
           assert(LocationSym);
         }
       }
-      In<ELFT>::CapRelocs->addCapReloc({LocationSym, Offset}, Config->Pic,
-                                       {&Body, 0u}, NeedsDynReloc, Addend);
+      In<ELFT>::CapRelocs->addCapReloc({LocationSym, Offset}, Sec.File,
+                                       Config->Pic, {&Body, 0u}, NeedsDynReloc,
+                                       Addend);
       // TODO: check if it needs a plt stub
       continue;
     }
@@ -979,8 +981,8 @@ static void scanRelocs(InputSectionBase &Sec, ArrayRef<RelTy> Rels) {
                                    InX::CheriCapTable, nullptr)
                 ->body());
       In<ELFT>::CapRelocs->addCapReloc(
-        {ElfSym::CheriCapabilityTable, Index * Config->CapabilitySize}, Config->Pic,
-                                       {&Body, 0u}, Body.IsPreemptible, Addend);
+        {ElfSym::CheriCapabilityTable, Index * Config->CapabilitySize}, nullptr,
+         Config->Pic, {&Body, 0u}, Body.IsPreemptible, Addend);
       if (Config->Pic) {
         static bool HasWarned = false;
         if (!HasWarned) {
