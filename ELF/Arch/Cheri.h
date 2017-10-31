@@ -25,11 +25,11 @@ template <llvm::support::endianness E> struct InMemoryCapRelocEntry {
 };
 
 struct SymbolAndOffset {
-  SymbolAndOffset(SymbolBody *S, uint64_t O) : Symbol(S), Offset(O) {}
+  SymbolAndOffset(SymbolBody *S, int64_t O) : Symbol(S), Offset(O) {}
   SymbolAndOffset(const SymbolAndOffset &) = default;
   SymbolAndOffset &operator=(const SymbolAndOffset &) = default;
   SymbolBody *Symbol = nullptr;
-  uint64_t Offset = 0;
+  int64_t Offset = 0;
 
   // for __cap_relocs against local symbols clang emits section+offset instead
   // of the local symbol so that it still works even if the local symbol table
