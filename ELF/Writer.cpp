@@ -84,6 +84,9 @@ private:
   OutputSection *findSection(StringRef Name);
 
   std::vector<PhdrEntry *> Phdrs;
+  // Keep a list of section start symbols since we need to update the size
+  // once we know how big the section is
+  std::vector<std::pair<DefinedRegular*, OutputSection*>> SectionStartSymbols;
 
   uint64_t FileSize;
   uint64_t SectionHeaderOff;
@@ -979,8 +982,11 @@ template <class ELFT> void Writer<ELFT>::setReservedSymbolSections() {
       ElfSym::Edata2->Section = OutputSections[I - 1];
   }
 
-  if (ElfSym::Bss)
-    ElfSym::Bss->Section = findSection(".bss");
+  if (ElfSym::Bss) {
+    auto Bss = findSection(".bss");
+    ElfSym::Bss->Section = Bss;
+    ElfSym::Bss->Size = Bss ? Bss->Size : 0;
+  }
 
   // Setup MIPS _gp_disp/__gnu_local_gp symbols which should
   // be equal to the _gp symbol's value.
@@ -1440,6 +1446,12 @@ template <class ELFT> void Writer<ELFT>::finalizeSections() {
   // createThunks may have added local symbols to the static symbol table
   applySynthetic({InX::SymTab, InX::ShStrTab, InX::StrTab},
                  [](SyntheticSection *SS) { SS->postThunkContents(); });
+
+  // We know the size of the sections referenced by __start_foo symbols so we
+  // can set the size now.
+  for (auto& SectionSym : SectionStartSymbols)
+    if (SectionSym.first && SectionSym.second)
+      SectionSym.first->Size = SectionSym.second->Size;
 }
 
 template <class ELFT> void Writer<ELFT>::addPredefinedSections() {
@@ -1460,7 +1472,11 @@ template <class ELFT> void Writer<ELFT>::addStartEndSymbols() {
     // These symbols resolve to the image base if the section does not exist.
     // A special value -1 indicates end of the section.
     if (OS) {
-      addOptionalRegular<ELFT>(Start, OS, 0, STV_HIDDEN, STB_GLOBAL, OS->Size);
+      auto *StartSym = addOptionalRegular<ELFT>(Start, OS, 0);
+      // Save the start symbol since we need to update the size once we know the
+      // size of the output section
+      if (StartSym)
+        SectionStartSymbols.push_back(std::make_pair(StartSym, OS));
       addOptionalRegular<ELFT>(End, OS, -1);
     } else {
       if (Config->Pic)
@@ -1495,7 +1511,12 @@ void Writer<ELFT>::addStartStopSymbols(OutputSection *Sec) {
   StringRef S = Sec->Name;
   if (!isValidCIdentifier(S))
     return;
-  addOptionalRegular<ELFT>(Saver.save("__start_" + S), Sec, 0, STV_DEFAULT);
+  auto *StartSym = addOptionalRegular<ELFT>(Saver.save("__start_" + S), Sec, 0,
+                                            STV_DEFAULT);
+  // Save the start symbol since we need to update the size once we know the
+  // size of the output section
+  if (StartSym)
+    SectionStartSymbols.push_back(std::make_pair(StartSym, Sec));
   addOptionalRegular<ELFT>(Saver.save("__stop_" + S), Sec, -1, STV_DEFAULT);
 }
 
