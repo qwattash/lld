@@ -260,6 +260,7 @@ std::pair<Symbol *, bool> SymbolTable::insert(StringRef Name) {
     Sym->CanInline = true;
     Sym->Traced = V.Traced;
     Sym->VersionId = Config->DefaultSymbolVersion;
+    Sym->WasUndefWeak = false;
     SymVector.push_back(Sym);
   } else {
     Sym = SymVector[V.Idx];
@@ -314,6 +315,9 @@ Symbol *SymbolTable::addUndefined(StringRef Name, bool IsLocal, uint8_t Binding,
   uint8_t Visibility = getVisibility(StOther);
   std::tie(S, WasInserted) =
       insert(Name, Type, Visibility, CanOmitFromDynSym, File);
+
+  if (WasInserted && Binding == STB_WEAK)
+    S->WasUndefWeak = true;
   // An undefined symbol with non default visibility must be satisfied
   // in the same DSO.
   if (WasInserted ||

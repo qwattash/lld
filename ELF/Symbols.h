@@ -386,6 +386,12 @@ struct Symbol {
   // This symbol version was found in a version script.
   unsigned InVersionScript : 1;
 
+  // This symbol was originally a weak symbol (used to mark linker synthesized
+  // symbols so that __cap_relocs doesn't warn about zero size symbols if the
+  // target is a weak symbol that has been resolved to nothing).
+  // XXXAR: find a better way to solve this
+  unsigned WasUndefWeak : 1;
+
   // The file from which this symbol was created.
   InputFile *File = nullptr;
 
@@ -427,13 +433,12 @@ inline Symbol *SymbolBody::symbol() {
   return reinterpret_cast<Symbol *>(reinterpret_cast<char *>(this) -
                                     offsetof(Symbol, Body));
 }
-} // namespace elf
-
-std::string toString(const elf::SymbolBody &B);
 
 template<class ELFT>
 std::string verboseToString(elf::SymbolBody *B, uint64_t SymOffset = 0);
+} // namespace elf
 
+std::string toString(const elf::SymbolBody &B);
 } // namespace lld
 
 #endif

@@ -378,11 +378,16 @@ std::string lld::toString(const SymbolBody &B) {
 }
 
 template <class ELFT>
-std::string lld::verboseToString(SymbolBody *B, uint64_t SymOffset) {
+std::string lld::elf::verboseToString(SymbolBody *B, uint64_t SymOffset) {
   std::string Msg;
 
   if (B->isLocal())
     Msg += "local ";
+  else {
+    // ->symbol() cannot be called on local symbols
+    if (B->symbol()->isWeak())
+      Msg += "weak ";
+  }
   if (B->isShared())
     Msg += "shared ";
   if (B->isCommon())
@@ -398,7 +403,7 @@ std::string lld::verboseToString(SymbolBody *B, uint64_t SymOffset) {
   else if (B->isObject())
     Msg += "object ";
   else if (B->isFile())
-    Msg += "object ";
+    Msg += "file ";
   else if (B->isUndefined())
     Msg += "<undefined> ";
   else
@@ -442,10 +447,10 @@ std::string lld::verboseToString(SymbolBody *B, uint64_t SymOffset) {
   return Msg;
 }
 
-template std::string lld::verboseToString<ELF32LE>(SymbolBody *B, uint64_t SymOffset);
-template std::string lld::verboseToString<ELF32BE>(SymbolBody *B, uint64_t SymOffset);
-template std::string lld::verboseToString<ELF64LE>(SymbolBody *B, uint64_t SymOffset);
-template std::string lld::verboseToString<ELF64BE>(SymbolBody *B, uint64_t SymOffset);
+template std::string lld::elf::verboseToString<ELF32LE>(SymbolBody *B, uint64_t SymOffset);
+template std::string lld::elf::verboseToString<ELF32BE>(SymbolBody *B, uint64_t SymOffset);
+template std::string lld::elf::verboseToString<ELF64LE>(SymbolBody *B, uint64_t SymOffset);
+template std::string lld::elf::verboseToString<ELF64BE>(SymbolBody *B, uint64_t SymOffset);
 
 template uint32_t SymbolBody::template getSize<ELF32LE>() const;
 template uint32_t SymbolBody::template getSize<ELF32BE>() const;
