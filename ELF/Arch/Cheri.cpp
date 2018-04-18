@@ -605,15 +605,18 @@ void CheriCapTableSection::assignValuesAndAddCapTableSymbols() {
 
     // Avoid duplicate symbol name errors for unnamed string constants:
     // XXXAR: maybe renumber them instead?
-    if (Name.startswith(".L.str"))
-      continue;
+    // XXXAM: instead of renumbering I use the index in the table as
+    // uniquifier. This also removes the problem of having to concatenate
+    // the .duplicate-name for existing symbols.
+    std::string RefName = (Name + "@CAPTABLE." + std::to_string(Index)).str();
+
     // XXXAR: for some reason we sometimes create more than one cap table entry
     // for a given global name, for now just rename the symbol
     // Could possibly happen with local symbols?
-    std::string RefName = (Name + "@CAPTABLE").str();
-    while (Symtab->find(RefName)) {
-      RefName += ".duplicate-name";
-    }
+    // std::string RefName = (Name + "@CAPTABLE").str();
+    // while (Symtab->find(RefName)) {
+    //   RefName += ".duplicate-name";
+    // }
     uint64_t Off = Index * Config->CapabilitySize;
     Symtab->addRegular(Saver.save(RefName), STV_HIDDEN, STT_OBJECT, Off,
                        Config->CapabilitySize, STB_LOCAL, this, nullptr);
